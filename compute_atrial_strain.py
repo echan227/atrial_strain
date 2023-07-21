@@ -105,7 +105,7 @@ def find_distance_x(x1, y1, x2, y2):
     return math.sqrt((x1 - x2) ** 2 + (y1 - y2) ** 2)
 
 
-def get_LeftAtrial_circumference(contours, atria_edge1, atria_edge2, top_atrium, fr, study_ID):
+def get_atrial_circumference(contours, atria_edge1, atria_edge2, top_atrium, fr, study_ID):
     # coordinates of the non-linear line (example)
     indice1 = np.where((contours == (sorted(contours, key=lambda p: find_distance_x(
         p[0], p[1], atria_edge1[0], atria_edge1[1]))[0])).all(axis=1))[0][0]
@@ -113,32 +113,45 @@ def get_LeftAtrial_circumference(contours, atria_edge1, atria_edge2, top_atrium,
         p[0], p[1], atria_edge2[0], atria_edge2[1]))[0])).all(axis=1))[0][0]
     indice3 = np.where((contours == (sorted(contours, key=lambda p: find_distance_x(
         p[0], p[1], top_atrium[0], top_atrium[1]))[0])).all(axis=1))[0][0]
+    
     # deal with cases where contour goes on from end to start of array.
-    if indice1 > indice2:
-        # make sure top of atrium is in contour
+    if indice1 < indice2:
         if indice1 < indice3 < indice2:
-            temp = indice1
-            indice2 = indice1
-            indice1 = temp
-        contour_atria = np.concatenate(
-            (contours[indice1:, :], contours[:indice2, :]), axis=0)
+            contour_atria = contours[indice1:indice2+1, :]
+        else:
+            contour_atria = np.concatenate(
+                (contours[indice2:, :], contours[:indice1+1, :]), axis=0
+            )
     else:
-        # make sure top of atrium is in contour
-        if not indice1 < indice3 < indice2:
-            temp = indice1
-            indice2 = indice1
-            indice1 = temp
-        contour_atria = contours[indice1:indice2, :]
+        if indice2 < indice3 < indice1:
+            contour_atria = contours[indice2:indice1+1, :]
+        else:
+            contour_atria = np.concatenate(
+                (contours[indice1:, :], contours[:indice2+1, :]), axis=0
+            )
+
+    # if indice1 > indice2:
+    #     # make sure top of atrium is in contour
+    #     if indice1 < indice3 < indice2:
+    #         indice1, indice2 = indice2, indice1
+    #     contour_atria = np.concatenate(
+    #         (contours[indice1:, :], contours[:indice2, :]), axis=0)
+    # else:
+    #     # make sure top of atrium is in contour
+    #     if not indice1 < indice3 < indice2:
+    #         indice1, indice2 = indice2, indice1
+    #     contour_atria = contours[indice1:indice2, :]
 
     # calculate the length of the line using the distance formula
     total_length = 0
     if debug:
         plt.figure()
         plt.plot(contours[:, 1], contours[:, 0], 'r-')
-        plt.plot(contour_atria[:, 1], contour_atria[:, 0])
-        plt.plot(atria_edge1[1], atria_edge1[0], 'go')
-        plt.plot(atria_edge2[1], atria_edge2[0], 'bo')
-        plt.plot(top_atrium[1], top_atrium[0], 'bo')
+        plt.plot(contour_atria[:, 1], contour_atria[:, 0], label='atrium contour')
+        plt.plot(atria_edge1[1], atria_edge1[0], 'go', label='atrium edge 1')
+        plt.plot(atria_edge2[1], atria_edge2[0], 'bo', label='atrium edge 2')
+        plt.plot(top_atrium[1], top_atrium[0], 'mo', label='atrium top')
+        plt.legend()
         plt.title('{0} frame {1}'.format(study_ID, fr))
 
     for i in range(len(contour_atria)-1):
@@ -164,9 +177,10 @@ def get_right_atrial_volumes(seg, _fr, _pointsRV, logger):
     if debug:
         plt.figure()
         plt.imshow(seg)
-        plt.plot(_apex_RV[1], _apex_RV[0], 'mo')
-        plt.plot(_rvlv_point[1], _rvlv_point[0], 'c*')
-        plt.plot(_free_rv_point[1], _free_rv_point[0], 'y*')
+        plt.plot(_apex_RV[1], _apex_RV[0], 'mo', label='apex')
+        plt.plot(_rvlv_point[1], _rvlv_point[0], 'c*', label='rvlv')
+        plt.plot(_free_rv_point[1], _free_rv_point[0], 'y*', label='free_rv')
+        plt.legend()
 
     mid_valve_RV = np.mean([_rvlv_point, _free_rv_point], axis=0)
     _atria_seg = np.squeeze(seg == 5).astype(float)  # get atria label
@@ -196,12 +210,13 @@ def get_right_atrial_volumes(seg, _fr, _pointsRV, logger):
         plt.imshow(seg)
         plt.plot(_contours_RA[:, 1], _contours_RA[:, 0], 'r-')
         plt.plot(contours_RV[:, 1], contours_RV[:, 0], 'k-')
-        plt.plot(top_atria[1], top_atria[0], 'mo')
-        plt.plot(mid_valve_RA[1], mid_valve_RA[0], 'co')
-        plt.plot(atria_edge1[1], atria_edge1[0], 'go')
-        plt.plot(atria_edge2[1], atria_edge2[0], 'bo')
-        plt.plot(_rvlv_point[1], _rvlv_point[0], 'k*')
-        plt.plot(_free_rv_point[1], _free_rv_point[0], 'b*')
+        plt.plot(top_atria[1], top_atria[0], 'mo', label='top RA')
+        plt.plot(mid_valve_RA[1], mid_valve_RA[0], 'co', label='midvalve RA')
+        plt.plot(atria_edge1[1], atria_edge1[0], 'go', label='atrium edge 1')
+        plt.plot(atria_edge2[1], atria_edge2[0], 'yo', label='atrium edge 2')
+        plt.plot(_rvlv_point[1], _rvlv_point[0], 'k*', label='rvlv')
+        plt.plot(_free_rv_point[1], _free_rv_point[0], 'b*', label='free rv')
+        plt.legend()
 
     # Rotate contours by theta degrees
     radians = np.arctan2(np.array((atria_edge1[0] - atria_edge2[0]) / 2),
@@ -276,11 +291,12 @@ def get_right_atrial_volumes(seg, _fr, _pointsRV, logger):
     if debug:
         plt.figure()
         plt.plot(contour_smth[:, 0], contour_smth[:, 1], 'r-')
-        plt.plot(final_atrial_edge2[0], final_atrial_edge2[1], 'y*')
-        plt.plot(final_atrial_edge1[0], final_atrial_edge1[1], 'm*')
-        plt.plot(final_top_atria[0], final_top_atria[1], 'c*')
-        plt.plot(final_mid_avalve[0], final_mid_avalve[1], 'b*')
+        plt.plot(final_atrial_edge2[0], final_atrial_edge2[1], 'y*', label='atrium edge 2')
+        plt.plot(final_atrial_edge1[0], final_atrial_edge1[1], 'm*', label='atrium edge 1')
+        plt.plot(final_top_atria[0], final_top_atria[1], 'c*', label='RA top')
+        plt.plot(final_mid_avalve[0], final_mid_avalve[1], 'b*', label='midvalve')
         plt.title('RA 4Ch frame {}'.format(_fr))
+        plt.legend()
 
     alength_top = distance.pdist([final_mid_avalve, final_top_atria])[0]
     alength_perp = distance.pdist([final_mid_avalve, final_perp_top_atria])[0]
@@ -295,7 +311,10 @@ def get_right_atrial_volumes(seg, _fr, _pointsRV, logger):
         if ib == 0:
             a_diams[ib] = diam1
         else:
+            # Get next vertical y point
             vert_y = final_mid_avalve[1] - a_segmts * ib
+
+            # Find all y points close to vert_y
             rgne_vertY = a_segmts / 6
             min_Y = vert_y - rgne_vertY
             max_Y = vert_y + rgne_vertY
@@ -303,24 +322,26 @@ def get_right_atrial_volumes(seg, _fr, _pointsRV, logger):
                 intpl_YY >= min_Y, intpl_YY <= max_Y))[0]
 
             if len(ind_sel_conts) == 0:
-                logger.error('Problem in disk {}'.format(ib))
+                logger.error(f'Problem in frame {_fr} disk {ib} getting y points close to vert_y')
                 continue
 
+            # Find coordinates of points close to vert_y
             y_sel_conts = contour_smth[ind_sel_conts, 1]
             x_sel_conts = contour_smth[ind_sel_conts, 0]
             min_ys = np.argmin(np.abs(y_sel_conts - vert_y))
-
             p1 = ind_sel_conts[min_ys]
             point1 = contour_smth[p1]
 
+            # Mean is roughly the midpoint horizontally
             mean_x = np.mean([np.min(x_sel_conts), np.max(x_sel_conts)])
-            if mean_x < point1[0]:
+            if mean_x < point1[0]:  # If point1 is on right side
                 ind_xs = np.where(contour_smth[ind_sel_conts, 0] < mean_x)[0]
                 pts = contour_smth[ind_sel_conts[ind_xs], :]
                 min_ys = np.argmin(np.abs(pts[:, 1] - vert_y))
                 point2 = pts[min_ys]
                 a_diam = distance.pdist([point1, point2])[0]
             elif np.min(x_sel_conts) == np.max(x_sel_conts):
+                # If only points all along same horizontal plane
                 logger.info(
                     'Frame {}, disk {} diameter is zero'.format(_fr, ib))
                 a_diam = 0
@@ -338,7 +359,7 @@ def get_right_atrial_volumes(seg, _fr, _pointsRV, logger):
                     point2 = np.zeros(2)
                     point1 = np.zeros(2)
                     logger.info(
-                        'la_4Ch: Frame {}, disk {} diameter is zero'.format(_fr, ib))
+                        'ra_4Ch: Frame {}, disk {} diameter is zero'.format(_fr, ib))
 
             a_diams[ib] = a_diam
             points_aux[k, :] = point1
@@ -369,7 +390,6 @@ def get_right_atrial_volumes(seg, _fr, _pointsRV, logger):
 
 
 def get_left_atrial_volumes(seg, _seq, _fr, _points, logger):
-    log_dir = '/motion_repository/UKBiobank/AICMRQC_analysis/log'
     """
     This function gets the centre line (height) of the atrium and atrial dimension at 15 points along this line.
     """
@@ -377,11 +397,11 @@ def get_left_atrial_volumes(seg, _seq, _fr, _points, logger):
     if debug:
         plt.figure()
         plt.imshow(seg)
-        plt.plot(_apex[1], _apex[0], 'mo')
-        plt.plot(_mid_valve[1], _mid_valve[0], 'c*')
-        plt.plot(anterior_2Ch[1], anterior_2Ch[0], 'y*')
-        plt.plot(inferior_2Ch[1], inferior_2Ch[0], 'r*')
-        plt.savefig(os.path.join(log_dir, f'{_seq}_LV_points.png'))
+        plt.plot(_apex[1], _apex[0], 'mo', label='apex')
+        plt.plot(_mid_valve[1], _mid_valve[0], 'c*', label='midvalve')
+        plt.plot(anterior_2Ch[1], anterior_2Ch[0], 'y*', label='anterior')
+        plt.plot(inferior_2Ch[1], inferior_2Ch[0], 'r*', label='inferior')
+        plt.legend()
 
     if _seq == 'la_2Ch':
         _atria_seg = np.squeeze(seg == 3).astype(float)  # get atria label
@@ -422,11 +442,11 @@ def get_left_atrial_volumes(seg, _seq, _fr, _points, logger):
     if debug:
         plt.figure()
         plt.imshow(seg)
-        plt.plot(top_atria[1], top_atria[0], 'mo')
-        plt.plot(mid_valve_atria[1], mid_valve_atria[0], 'c*')
-        plt.plot(atria_edge1[1], atria_edge1[0], 'y*')
-        plt.plot(atria_edge2[1], atria_edge2[0], 'r*')
-        plt.savefig(os.path.join(log_dir, f'{_seq}_atria_points.png'))
+        plt.plot(top_atria[1], top_atria[0], 'mo', label='LA top')
+        plt.plot(mid_valve_atria[1], mid_valve_atria[0], 'c*', label='midvalve')
+        plt.plot(atria_edge1[1], atria_edge1[0], 'y*', label='atrium edge 1')
+        plt.plot(atria_edge2[1], atria_edge2[0], 'r*', label='atrium edge 2')
+        plt.legend()
 
     # Rotate contours by theta degrees
     radians = np.arctan2(np.array((atria_edge2[0] - atria_edge1[0]) / 2),
@@ -499,14 +519,15 @@ def get_left_atrial_volumes(seg, _seq, _fr, _points, logger):
     if debug:
         plt.figure()
         plt.plot(contour_smth[:, 0], contour_smth[:, 1], 'r-')
-        plt.plot(final_atrial_edge2[0], final_atrial_edge2[1], 'y*')
-        plt.plot(final_atrial_edge1[0], final_atrial_edge1[1], 'm*')
-        plt.plot(final_perp_top_atria[0], final_perp_top_atria[1], 'ko')
-        plt.plot(final_top_atria[0], final_top_atria[1], 'c*')
-        plt.plot(new_top_atria[0], new_top_atria[1], 'g*')
-        plt.plot(final_mid_avalve[0], final_mid_avalve[1], 'b*')
+        plt.plot(final_atrial_edge2[0], final_atrial_edge2[1], 'y*', label='atrium edge 2')
+        plt.plot(final_atrial_edge1[0], final_atrial_edge1[1], 'm*', label='atrium edge 1')
+        plt.plot(final_perp_top_atria[0], final_perp_top_atria[1], 'ko', label='perp top')
+        plt.plot(final_top_atria[0], final_top_atria[1], 'c*', label='LA top')
+        plt.plot(new_top_atria[0], new_top_atria[1], 'g*', label='new top')
+        plt.plot(final_mid_avalve[0], final_mid_avalve[1], 'b*', label='midvalve')
+        plt.plot([final_mid_avalve[0], final_top_atria[0]], [final_mid_avalve[1], final_top_atria[1]])
+        plt.legend()
         plt.title('LA {}  frame {}'.format(_seq, _fr))
-        plt.savefig(os.path.join(log_dir, f'{_seq}_atria_points2.png'))
 
     # now find length of atrium divide in the  15 segments
     alength_top = distance.pdist([final_mid_avalve, final_top_atria])[0]
@@ -529,7 +550,7 @@ def get_left_atrial_volumes(seg, _seq, _fr, _points, logger):
                 intpl_YY >= min_Y, intpl_YY <= max_Y))[0]
 
             if len(ind_sel_conts) == 0:
-                logger.info('Problem in disk {}'.format(ib))
+                logger.info('Frame {}, problem in disk {}'.format(_fr, ib))
                 continue
 
             y_sel_conts = contour_smth[ind_sel_conts, 1]
@@ -945,18 +966,18 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
     if os.path.exists(filename_la_seg_2Ch):
         nim = nib.load(filename_la_seg_2Ch)
         la_seg_2Ch = nim.get_fdata()
-        dx, dy, dz = nim.header['pixdim'][1:4]
+        dx, dy, _ = nim.header['pixdim'][1:4]
         area_per_voxel = dx * dy
         if len(la_seg_2Ch.shape) == 4:
             la_seg_2Ch = la_seg_2Ch[:, :, 0, :]
-        X, Y, N_frames_2Ch = la_seg_2Ch.shape
+        _, _, N_frames_2Ch = la_seg_2Ch.shape
 
         # Get largest connected components
         for fr in range(N_frames_2Ch):
             la_seg_2Ch[:, :, fr] = getLargestCC(la_seg_2Ch[:, :, fr])
 
         # Compute 2ch area using number of pixels
-        area_LA_2Ch = np.zeros(N_frames_2Ch)
+        area_LA_2Ch = -1*np.ones(N_frames_2Ch)
         for fr in range(N_frames_2Ch):
             area_LA_2Ch[fr] = np.sum(
                 np.squeeze(
@@ -968,20 +989,20 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
             results_dir, f'{study_ID}_2ch_length_dict.npy')
         if os.path.exists(dict_2ch_file):
             # If already saved, load the dictionary
-            logger.info('Loading pre-saved dictionary of params')
+            logger.info('Loading pre-saved dictionary of 2ch params')
             dict_2ch = np.load(dict_2ch_file, allow_pickle=True).item()
             la_diams_2Ch = dict_2ch['la_diams_2Ch']
             length_top_2Ch = dict_2ch['length_top_2Ch']
-            LA_circumf_2Ch = dict_2ch['LA_circumf_2Ch']
+            LA_circumf_cycle_2Ch = dict_2ch['LA_circumf_cycle_2Ch']
         else:
             # Otherwise, calculate and save points
-            logger.info('Calculating points')
+            logger.info('Calculating 2ch points')
             save_2ch_dict_flag = True
-            points_LV_2Ch = np.zeros((N_frames_2Ch, 4, 2))
-            LV_atria_points_2Ch = np.zeros((N_frames_2Ch, 9, 2))
-            la_diams_2Ch = np.zeros((N_frames_2Ch, Nsegments_length))
-            length_top_2Ch = np.zeros(N_frames_2Ch)
-            LA_circumf_cycle_2Ch = np.zeros(N_frames_2Ch)
+            points_LV_2Ch = -1*np.ones((N_frames_2Ch, 4, 2))
+            LV_atria_points_2Ch = -1*np.ones((N_frames_2Ch, 9, 2))
+            la_diams_2Ch = -1*np.ones((N_frames_2Ch, Nsegments_length))
+            length_top_2Ch = -1*np.ones(N_frames_2Ch)
+            LA_circumf_cycle_2Ch = -1*np.ones(N_frames_2Ch)
 
             for fr in range(N_frames_2Ch):
                 try:
@@ -991,8 +1012,8 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
                     points_LV_2Ch[fr, :] = points
                 except Exception:
                     logger.error(
-                        'Problem detecting LV points {study_ID}'
-                        ' in la_2Ch fr {fr}')
+                        f'Problem detecting LV points {study_ID}'
+                        f' in la_2Ch fr {fr}')
                     QC_atria_2Ch = 1
 
                 if QC_atria_2Ch == 0:
@@ -1019,10 +1040,9 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
                         LV_atria_points_2Ch[fr, 7, :] = points_LV[2, :]
                         # anterior_2Ch
                         LV_atria_points_2Ch[fr, 8, :] = points_LV[3, :]
-                        logger.info('Finished calculating points')
 
                         # compute atrial circumference
-                        LA_circumf_2Ch = get_LeftAtrial_circumference(contours_LA, [points_non_rotate[3, 1], points_non_rotate[3, 0]], [
+                        LA_circumf_2Ch = get_atrial_circumference(contours_LA, [points_non_rotate[3, 1], points_non_rotate[3, 0]], [
                             points_non_rotate[4, 1], points_non_rotate[4, 0]], [points_non_rotate[1, 1], points_non_rotate[1, 0]], fr, study_ID)
                         LA_circumf_len_2Ch = LA_circumf_2Ch * dx
                         LA_circumf_cycle_2Ch[fr] = LA_circumf_len_2Ch
@@ -1030,30 +1050,36 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
                         logger.error('Problem in disk-making with subject {} in la_2Ch fr {}'.
                                      format(study_ID, fr))
                         QC_atria_2Ch = 1
+            logger.info('Finished calculating 2ch points\n')
 
         # =====================================================================
         # Compute 2ch strain
         # =====================================================================
+        LA_strain_circum_2Ch = -1*np.ones(N_frames_2Ch)
+        LA_strain_longitud_2ch = -1*np.ones(N_frames_2Ch)
         if QC_atria_2Ch == 0:
-            LA_strain_circum_2Ch = get_strain(LA_circumf_cycle_2Ch)
-            LA_strain_longitud_2ch = get_strain(length_top_2Ch)
-            np.savetxt(os.path.join(
-                results_dir, 'LA_strain_circum_2Ch.txt'), LA_strain_circum_2Ch)
-            np.savetxt(os.path.join(
-                results_dir, 'LA_strain_longitud_2Ch.txt'), LA_strain_longitud_2ch)
+            try:
+                LA_strain_circum_2Ch = get_strain(LA_circumf_cycle_2Ch)
+                LA_strain_longitud_2ch = get_strain(length_top_2Ch)
+                np.savetxt(os.path.join(
+                    results_dir, 'LA_strain_circum_2Ch.txt'), LA_strain_circum_2Ch)
+                np.savetxt(os.path.join(
+                    results_dir, 'LA_strain_longitud_2Ch.txt'), LA_strain_longitud_2ch)
 
-            x = np.linspace(0, N_frames_2Ch - 1, N_frames_2Ch)
-            xx = np.linspace(np.min(x), np.max(x), N_frames_2Ch)
-            itp = interp1d(x, LA_strain_circum_2Ch)
-            yy_sg = savgol_filter(itp(xx), window_size, poly_order)
-            LA_strain_circum_2Ch_smooth = yy_sg
-            itp = interp1d(x, LA_strain_longitud_2ch)
-            yy_sg = savgol_filter(itp(xx), window_size, poly_order)
-            LA_strain_longitud_2ch_smooth = yy_sg
-            np.savetxt(os.path.join(
-                results_dir, 'LA_strain_circum_2Ch_smooth.txt'), LA_strain_circum_2Ch_smooth)
-            np.savetxt(os.path.join(
-                results_dir, 'LA_strain_longitud_2ch_smooth.txt'), LA_strain_longitud_2ch_smooth)
+                x = np.linspace(0, N_frames_2Ch - 1, N_frames_2Ch)
+                xx = np.linspace(np.min(x), np.max(x), N_frames_2Ch)
+                itp = interp1d(x, LA_strain_circum_2Ch)
+                yy_sg = savgol_filter(itp(xx), window_size, poly_order)
+                LA_strain_circum_2Ch_smooth = yy_sg
+                itp = interp1d(x, LA_strain_longitud_2ch)
+                yy_sg = savgol_filter(itp(xx), window_size, poly_order)
+                LA_strain_longitud_2ch_smooth = yy_sg
+                np.savetxt(os.path.join(
+                    results_dir, 'LA_strain_circum_2Ch_smooth.txt'), LA_strain_circum_2Ch_smooth)
+                np.savetxt(os.path.join(
+                    results_dir, 'LA_strain_longitud_2ch_smooth.txt'), LA_strain_longitud_2ch_smooth)
+            except:
+                QC_atria_2Ch = 1
     else:
         QC_atria_2Ch = 1
 
@@ -1062,21 +1088,20 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
         dict_2ch = {}
         dict_2ch['la_diams_2Ch'] = la_diams_2Ch
         dict_2ch['length_top_2Ch'] = length_top_2Ch
-        dict_2ch['LA_circumf_2Ch'] = LA_circumf_2Ch
+        dict_2ch['LA_circumf_cycle_2Ch'] = LA_circumf_cycle_2Ch
 
         np.save(dict_2ch_file, dict_2ch)
         np.save(os.path.join(
             results_dir, f'{study_ID}_LV_atria_points_2Ch.npy'),
             LV_atria_points_2Ch)
-        np.save(os.path.join(results_dir, 'points_LV_2Ch.npy'),
-                points_LV_2Ch)
+        np.save(os.path.join(results_dir, 'points_LV_2Ch.npy'), points_LV_2Ch)
 
     # =====================================================================
     # Compute 2ch volume
     # =====================================================================
+    LA_volume_area_2ch = -1*np.ones(N_frames_2Ch)
+    LA_volume_SR_2ch = -1*np.ones(N_frames_2Ch)
     if QC_atria_2Ch == 0:
-        LA_volume_area_2ch = np.zeros(N_frames_2Ch)
-        LA_volume_SR_2ch = np.zeros(N_frames_2Ch)
         for fr in range(N_frames_2Ch):
             # Simpson's rule
             d1d2 = la_diams_2Ch[fr, :] * la_diams_2Ch[fr, :]
@@ -1108,8 +1133,8 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
             results_dir, 'LA_volume_area_2ch_smooth.txt'),
             LA_volume_area_2ch_smooth)
     else:
-        LA_volume_SR_2ch_smooth = np.zeros(20)
-        LA_volume_area_2ch_smooth = np.zeros(20)
+        LA_volume_SR_2ch_smooth = -1*np.ones(N_frames_2Ch)
+        LA_volume_area_2ch_smooth = -1*np.ones(N_frames_2Ch)
 
     # =========================================================================
     # la_4Ch - calculate area and points
@@ -1118,20 +1143,20 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
     if os.path.exists(filename_la_seg_4Ch):
         nim = nib.load(filename_la_seg_4Ch)
         la_seg_4Ch = nim.get_fdata()
-        dx, dy, dz = nim.header['pixdim'][1:4]
+        dx, dy, _ = nim.header['pixdim'][1:4]
         area_per_voxel = dx * dy
         if len(la_seg_4Ch.shape) == 4:
             la_seg_4Ch = la_seg_4Ch[:, :, 0, :]
         la_seg_4Ch = np.transpose(la_seg_4Ch, [1, 0, 2])
-        X, Y, N_frames_4Ch = la_seg_4Ch.shape
+        _, _, N_frames_4Ch = la_seg_4Ch.shape
 
         # Get largest connected components
         for fr in range(N_frames_4Ch):
             la_seg_4Ch[:, :, fr] = getLargestCC(la_seg_4Ch[:, :, fr])
 
         # Compute 4ch area using number of pixels
-        area_LA_4Ch = np.zeros(N_frames_4Ch)
-        area_RA = np.zeros(N_frames_4Ch)  # LA_4Ch
+        area_LA_4Ch = -1*np.ones(N_frames_4Ch)
+        area_RA = -1*np.ones(N_frames_4Ch)  # LA_4Ch
         for fr in range(N_frames_4Ch):
             area_LA_4Ch[fr] = np.sum(
                 np.squeeze(
@@ -1146,20 +1171,24 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
             results_dir, f'{study_ID}_4ch_LA_length_dict.npy')
         dict_4ch_RA_file = os.path.join(  # dict of length values - RA
             results_dir, f'{study_ID}_4ch_RA_length_dict.npy')
+        points_LV_4ch_file = os.path.join(results_dir, 'points_LV_4Ch.npy') 
         if os.path.exists(dict_4ch_LA_file):
             # If already saved, load the dictionary
+            logger.info('Loading pre-saved dictionary of 4ch LA params')
             dict_4ch_LA = np.load(dict_4ch_LA_file, allow_pickle=True).item()
             la_diams_4Ch = dict_4ch_LA['la_diams_4Ch']
             length_top_4Ch = dict_4ch_LA['length_top_4Ch']
-            LA_circumf_4Ch = dict_4ch_LA['LA_circumf_4Ch']
+            LA_circumf_cycle_4Ch = dict_4ch_LA['LA_circumf_cycle_4Ch']
+            points_LV_4Ch = np.load(points_LV_4ch_file)
         else:
             # Otherwise calculate and save points
             save_4ch_LA_dict_flag = True
-            la_diams_4Ch = np.zeros((N_frames_4Ch, Nsegments_length))
-            length_top_4Ch = np.zeros(N_frames_4Ch)
-            LA_circumf_cycle_4Ch = np.zeros(N_frames_4Ch)
-            points_LV_4Ch = np.zeros((N_frames_4Ch, 4, 2))
-            LV_atria_points_4Ch = np.zeros((N_frames_4Ch, 9, 2))
+            la_diams_4Ch = -1*np.ones((N_frames_4Ch, Nsegments_length))
+            length_top_4Ch = -1*np.ones(N_frames_4Ch)
+            LA_circumf_cycle_4Ch = -1*np.ones(N_frames_4Ch)
+            points_LV_4Ch = -1*np.ones((N_frames_4Ch, 4, 2))
+            LV_atria_points_4Ch = -1*np.ones((N_frames_4Ch, 9, 2))
+            logger.info('Calculating 4ch LA points')
 
             for fr in range(N_frames_4Ch):
                 try:
@@ -1169,14 +1198,14 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
                     points_LV_4Ch[fr, :] = points
                 except Exception:
                     logger.error(
-                        'Problem detecting LV points {study_ID}'
-                        'in la_4Ch fr {fr}')
+                        f'Problem detecting LV points {study_ID}'
+                        f' in la_4Ch fr {fr}')
                     QC_atria_4Ch_LA = 1
 
                 if QC_atria_4Ch_LA == 0:
                     # LA/LV points
                     try:
-                        la_dia, lentop, lenperp, points_non_rotate, contours_LA, lines_LV, points_LV = \
+                        la_dia, lentop, _, points_non_rotate, contours_LA, _, points_LV = \
                             get_left_atrial_volumes(
                                 la_seg_4Ch[:, :, fr], 'la_4Ch', fr, points, logger)
                         la_diams_4Ch[fr, :] = la_dia * dx
@@ -1199,7 +1228,7 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
                         # septal_4Ch
                         LV_atria_points_4Ch[fr, 8, :] = points_LV[3, :]
                         # compute atrial circumference
-                        LA_circumf_4Ch = get_LeftAtrial_circumference(contours_LA, [points_non_rotate[3, 1], points_non_rotate[3, 0]], [
+                        LA_circumf_4Ch = get_atrial_circumference(contours_LA, [points_non_rotate[3, 1], points_non_rotate[3, 0]], [
                             points_non_rotate[4, 1], points_non_rotate[4, 0]], [points_non_rotate[1, 1], points_non_rotate[1, 0]], fr, study_ID)
                         LA_circumf_len_4Ch = LA_circumf_4Ch * dx
                         LA_circumf_cycle_4Ch[fr] = LA_circumf_len_4Ch
@@ -1207,37 +1236,41 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
                         logger.error('Problem in disk-making with subject {} in la_4Ch fr {}'.
                                      format(study_ID, fr))
                         QC_atria_4Ch_LA = 1
+            logger.info('Finished calculating 4ch LA points\n')
 
         if os.path.exists(dict_4ch_RA_file):
+            logger.info('Loading pre-saved dictionary of 4ch RA params')
             dict_4ch_RA = np.load(dict_4ch_RA_file, allow_pickle=True).item()
             la_diams_RV = dict_4ch_RA['la_diams_RV']
             length_top_RV = dict_4ch_RA['length_top_RV']
-            RA_circumf_4Ch = dict_4ch_RA['RA_circumf_4Ch']
+            RA_circumf_cycle_4Ch = dict_4ch_RA['RA_circumf_cycle_4Ch']
         else:
             # Otherwise calculate and save points
             save_4ch_RA_dict_flag = True
-            la_diams_RV = np.zeros((N_frames_4Ch, Nsegments_length))  # LA_4Ch
-            length_top_RV = np.zeros(N_frames_4Ch)  # LA_4Ch
-            RA_circumf_cycle_4Ch = np.zeros(N_frames_4Ch)
-            points_RV_4Ch = np.zeros((N_frames_4Ch, 3, 2))
-            RV_atria_points_4Ch = np.zeros((N_frames_4Ch, 8, 2))
+            la_diams_RV = -1*np.ones((N_frames_4Ch, Nsegments_length))  # LA_4Ch
+            length_top_RV = -1*np.ones(N_frames_4Ch)  # LA_4Ch
+            RA_circumf_cycle_4Ch = -1*np.ones(N_frames_4Ch)
+            points_RV_4Ch = -1*np.ones((N_frames_4Ch, 3, 2))
+            RV_atria_points_4Ch = -1*np.ones((N_frames_4Ch, 8, 2))
+            logger.info('Calculating 4ch RA points')
 
             for fr in range(N_frames_4Ch):
                 try:
+                    # seg, anterior, log
                     apex_RV, rvlv_point, free_rv_point = detect_RV_points(
-                        la_seg_4Ch[:, :, fr], anterior, logger)
+                        la_seg_4Ch[:, :, fr], points_LV_4Ch[fr, 2], logger)
                     pointsRV = np.vstack([apex_RV, rvlv_point, free_rv_point])
                     points_RV_4Ch[fr, :] = pointsRV
                 except Exception:
                     logger.error(
-                        'Problem detecting RV points {study_ID}'
-                        'in la_4Ch fr {fr}')
+                        f'Problem detecting RV points {study_ID}'
+                        f' in la_4Ch fr {fr}')
                     QC_atria_4Ch_RA = 1
 
                 if QC_atria_4Ch_RA == 0:
                     # RA/RV points
                     try:
-                        la_dia, lentop, lenperp, points_non_rotate, contours_RA, RA_tapse_seq[fr] = \
+                        la_dia, lentop, _, points_non_rotate, contours_RA, _ = \
                             get_right_atrial_volumes(
                                 la_seg_4Ch[:, :, fr], fr, pointsRV, logger)
 
@@ -1261,7 +1294,7 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
                         # free_rv_point
                         RV_atria_points_4Ch[fr, 7, :] = pointsRV[2, :]
                         # compute atrial circumference
-                        RA_circumf_4Ch = get_LeftAtrial_circumference(contours_RA, [points_non_rotate[3, 1], points_non_rotate[3, 0]], [
+                        RA_circumf_4Ch = get_atrial_circumference(contours_RA, [points_non_rotate[3, 1], points_non_rotate[3, 0]], [
                             points_non_rotate[4, 1], points_non_rotate[4, 0]], [points_non_rotate[1, 1], points_non_rotate[1, 0]], fr, study_ID)
                         RA_circumf_len_4Ch = RA_circumf_4Ch * dx
                         RA_circumf_cycle_4Ch[fr] = RA_circumf_len_4Ch
@@ -1269,87 +1302,91 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
                         logger.error(
                             'RV Problem in disk-making with subject {} in la_4Ch fr {}'.format(study_ID, fr))
                         QC_atria_4Ch_RA = 1
+            logger.info('Finished calculating 4ch RA points\n')
+
+        # Save 4ch atrial points to avoid recomupting
+        if save_4ch_LA_dict_flag and QC_atria_4Ch_LA == 0:
+            dict_4ch_LA = {}
+            dict_4ch_LA['la_diams_4Ch'] = la_diams_4Ch
+            dict_4ch_LA['length_top_4Ch'] = length_top_4Ch
+            dict_4ch_LA['LA_circumf_cycle_4Ch'] = LA_circumf_cycle_4Ch
+
+            np.save(dict_4ch_LA_file, dict_4ch_LA)
+            np.save(os.path.join(results_dir, f'{study_ID}_LV_atria_points_4Ch.npy'), LV_atria_points_4Ch)
+            np.save(points_LV_4ch_file, points_LV_4Ch)
+
+        if save_4ch_RA_dict_flag and QC_atria_4Ch_RA == 0:
+            dict_4ch_RA = {}
+            dict_4ch_RA['la_diams_RV'] = la_diams_RV
+            dict_4ch_RA['length_top_RV'] = length_top_RV
+            dict_4ch_RA['RA_circumf_cycle_4Ch'] = RA_circumf_cycle_4Ch
+            np.save(dict_4ch_RA_file, dict_4ch_RA)
+            np.save(os.path.join(results_dir, f'{study_ID}_RV_atria_points_4Ch.npy'), RV_atria_points_4Ch)
+            np.save(os.path.join(results_dir, 'points_RV_4Ch.npy'), points_RV_4Ch)
 
         # =====================================================================
         # 4ch Strain
         # =====================================================================
+        LA_strain_circum_4Ch_smooth = -1*np.ones(N_frames_4Ch)
+        LA_strain_longitud_4Ch_smooth = -1*np.ones(N_frames_4Ch)
         if QC_atria_4Ch_LA == 0:
-            LA_strain_circum_4Ch = get_strain(LA_circumf_cycle_4Ch)
-            LA_strain_longitud_4Ch = get_strain(length_top_4Ch)
-            
-            x = np.linspace(0, N_frames_4Ch - 1, N_frames_4Ch)
-            xx = np.linspace(np.min(x), np.max(x), N_frames_4Ch)
-            itp = interp1d(x, LA_strain_circum_4Ch)
-            yy_sg = savgol_filter(itp(xx), window_size, poly_order)
-            LA_strain_circum_4Ch_smooth = yy_sg
-            itp = interp1d(x, LA_strain_longitud_4Ch)
-            yy_sg = savgol_filter(itp(xx), window_size, poly_order)
-            LA_strain_longitud_4Ch_smooth = yy_sg
+            try:
+                LA_strain_circum_4Ch = get_strain(LA_circumf_cycle_4Ch)
+                LA_strain_longitud_4Ch = get_strain(length_top_4Ch)
+                
+                x = np.linspace(0, N_frames_4Ch - 1, N_frames_4Ch)
+                xx = np.linspace(np.min(x), np.max(x), N_frames_4Ch)
+                itp = interp1d(x, LA_strain_circum_4Ch)
+                yy_sg = savgol_filter(itp(xx), window_size, poly_order)
+                LA_strain_circum_4Ch_smooth = yy_sg
+                itp = interp1d(x, LA_strain_longitud_4Ch)
+                yy_sg = savgol_filter(itp(xx), window_size, poly_order)
+                LA_strain_longitud_4Ch_smooth = yy_sg
 
-            np.savetxt(os.path.join(
-                results_dir, 'LA_strain_smooth_4Ch.txt'),
-                LA_strain_circum_4Ch_smooth)
-            
-            np.savetxt(os.path.join(
-                results_dir, 'LA_strain_longitud_4Ch_smooth.txt'),
-                LA_strain_longitud_4Ch_smooth)
-            
+                np.savetxt(os.path.join(
+                    results_dir, 'LA_strain_smooth_4Ch.txt'),
+                    LA_strain_circum_4Ch_smooth)
+                
+                np.savetxt(os.path.join(
+                    results_dir, 'LA_strain_longitud_4Ch_smooth.txt'),
+                    LA_strain_longitud_4Ch_smooth)
+            except:
+                QC_atria_4Ch_LA = 1
+                logger.error('Error interpolating LA strains')
+
+        RA_strain_circum_4Ch_smooth = -1*np.ones(N_frames_4Ch)
+        RA_strain_longitud_4Ch_smooth = -1*np.ones(N_frames_4Ch)
         if QC_atria_4Ch_RA == 0:
-            RA_strain_circum_4Ch = get_strain(RA_circumf_cycle_4Ch)
-            RA_strain_longitud_4Ch = get_strain(length_top_RV)
+            try:
+                RA_strain_circum_4Ch = get_strain(RA_circumf_cycle_4Ch)
+                RA_strain_longitud_4Ch = get_strain(length_top_RV)
 
-            x = np.linspace(0, N_frames_4Ch - 1, N_frames_4Ch)
-            xx = np.linspace(np.min(x), np.max(x), N_frames_4Ch)
-            itp = interp1d(x, RA_strain_circum_4Ch)
-            yy_sg = savgol_filter(itp(xx), window_size, poly_order)
-            RA_strain_circum_4Ch_smooth = yy_sg
-            itp = interp1d(x, RA_strain_longitud_4Ch)
-            yy_sg = savgol_filter(itp(xx), window_size, poly_order)
-            RA_strain_longitud_4Ch_smooth = yy_sg
+                x = np.linspace(0, N_frames_4Ch - 1, N_frames_4Ch)
+                xx = np.linspace(np.min(x), np.max(x), N_frames_4Ch)
+                itp = interp1d(x, RA_strain_circum_4Ch)
+                yy_sg = savgol_filter(itp(xx), window_size, poly_order)
+                RA_strain_circum_4Ch_smooth = yy_sg
+                itp = interp1d(x, RA_strain_longitud_4Ch)
+                yy_sg = savgol_filter(itp(xx), window_size, poly_order)
+                RA_strain_longitud_4Ch_smooth = yy_sg
 
-            np.savetxt(os.path.join(
-                results_dir, 'RA_strain_smooth_4Ch.txt'),
-                RA_strain_circum_4Ch_smooth)
-            np.savetxt(os.path.join(
-                results_dir, 'RA_strain_longitud_4Ch_smooth.txt'),
-                RA_strain_longitud_4Ch_smooth)
-
-    else:
-        QC_atria_4Ch_LA = 1
-        # RA_strain_circum_4Ch_smooth = -1*np.ones(20)
-        # LA_strain_circum_4Ch_smooth = -1*np.ones(20)
-        # RA_strain_longitud_4Ch_smooth = -1*np.ones(20)
-        # LA_strain_longitud_4Ch_smooth = -1*np.ones(20)
-
-    # Save 4ch atrial points to avoid recomupting
-    if save_4ch_LA_dict_flag and QC_atria_4Ch_LA == 0:
-        dict_4ch_LA = {}
-        dict_4ch_LA['la_diams_4Ch'] = la_diams_4Ch
-        dict_4ch_LA['length_top_4Ch'] = length_top_4Ch
-        dict_4ch_LA['LA_circumf_4Ch'] = LA_circumf_4Ch
-
-        np.save(dict_4ch_LA_file, dict_4ch_LA)
-        np.save(os.path.join(results_dir, '{}_LV_atria_points_4Ch'.format(
-            study_ID)), LV_atria_points_4Ch)
-        np.save(os.path.join(results_dir, 'points_LV_4Ch'), points_LV_4Ch)
-
-    if save_4ch_RA_dict_flag and QC_atria_4Ch_RA == 0:
-        dict_4ch_RA = {}
-        dict_4ch_RA['la_diams_RV'] = la_diams_RV
-        dict_4ch_RA['length_top_RV'] = length_top_RV
-        dict_4ch_RA['RA_circumf_4Ch'] = RA_circumf_4Ch
-        np.save(dict_4ch_RA_file, dict_4ch_RA)
-        np.save(os.path.join(results_dir, '{}_RV_atria_points_4Ch'.format(
-            study_ID)), RV_atria_points_4Ch)
-        np.save(os.path.join(results_dir, 'points_RV_4Ch'), points_RV_4Ch)
+                np.savetxt(os.path.join(
+                    results_dir, 'RA_strain_smooth_4Ch.txt'),
+                    RA_strain_circum_4Ch_smooth)
+                np.savetxt(os.path.join(
+                    results_dir, 'RA_strain_longitud_4Ch_smooth.txt'),
+                    RA_strain_longitud_4Ch_smooth)
+            except:
+                QC_atria_4Ch_RA = 1
+                logger.error('Error interpolating RA strains')
 
     # =====================================================================
     # Compute 4ch volume
     # =====================================================================
     # LA volumes
+    LA_volume_SR_4Ch = -1*np.ones(N_frames_4Ch)
+    LA_volume_area_4ch = -1*np.ones(N_frames_4Ch)
     if QC_atria_4Ch_LA == 0:
-        LA_volume_SR_4Ch = np.zeros(N_frames_4Ch)
-        LA_volume_area_4ch = np.zeros(N_frames_4Ch)
         for fr in range(N_frames_4Ch):
             # Simpson's rule
             d1d2 = la_diams_4Ch[fr, :] * la_diams_4Ch[fr, :]
@@ -1380,11 +1417,14 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
         np.savetxt(os.path.join(
             results_dir, 'LA_volume_area_4ch_smooth.txt'),
             LA_volume_area_4ch_smooth)
+    else:
+        LA_volume_area_4ch_smooth = -1*np.ones(N_frames_4Ch)
+        LA_volume_SR_4Ch_smooth = -1*np.ones(N_frames_4Ch)
 
-    # RA volumes  
+    # RA volumes 
+    RA_volumes_SR = -1*np.ones(N_frames_4Ch)
+    RA_volumes_area = -1*np.ones(N_frames_4Ch) 
     if QC_atria_4Ch_RA == 0:
-        RA_volumes_SR = np.zeros(N_frames_4Ch)
-        RA_volumes_area = np.zeros(N_frames_4Ch)
         for fr in range(N_frames_4Ch):
             d1d2 = la_diams_RV[fr, :] * la_diams_RV[fr, :]
             length = length_top_RV[fr]
@@ -1410,36 +1450,33 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
             results_dir, 'RA_volumes_SR_smooth.txt'), RA_volumes_SR_smooth)
         np.savetxt(os.path.join(
             results_dir, 'RA_volumes_area_smooth.txt'), RA_volumes_area_smooth)
-    # else:
-    #     LA_volume_SR_4Ch_smooth = np.zeros(20)
-    #     RA_volumes_area_smooth = np.zeros(20)
-    #     RA_volumes_SR_smooth = np.zeros(20)
+    else:
+        RA_volumes_area_smooth = -1*np.ones(N_frames_4Ch)
+        RA_volumes_SR_smooth = -1*np.ones(N_frames_4Ch)
 
     # =====================================================================
     # Compute volume by combining 2ch and 4ch views
     # =====================================================================
+    LA_volume_combined_SR = -1*np.ones(N_frames_4Ch)
+    LA_volume_combined_area = -1*np.ones(N_frames_4Ch)
     if QC_atria_4Ch_LA == 0 and QC_atria_2Ch == 0 and N_frames_2Ch == N_frames_4Ch:
-        LA_volume_combined_SR = np.zeros(N_frames_4Ch)
-        LA_volume_combined_area = np.zeros(N_frames_4Ch)
-
-        # Combined volume based on Simpson's rule
         for fr in range(N_frames_4Ch):
+            # Combined volume based on Simpson's rule
             d1d2 = la_diams_2Ch[fr, :] * la_diams_4Ch[fr, :]
             length = np.min([length_top_2Ch[fr], length_top_4Ch[fr]])
             LA_volume_combined_SR[fr] = math.pi / 4 * length * \
                 np.sum(d1d2) / Nsegments_length / 1000
-
-        # Combined volume based on number of pixels
-        if N_frames_2Ch == N_frames_4Ch:
+            
+            # Combined volume based on number of pixels
             LA_volume_combined_area[fr] = 0.85 * area_LA_2Ch[fr] * \
-                area_LA_4Ch[fr] / length / 1000
-
+            area_LA_4Ch[fr] / length / 1000
+            
         x = np.linspace(0, N_frames_4Ch - 1, N_frames_4Ch)
         xx = np.linspace(np.min(x), np.max(x), N_frames_4Ch)
         itp = interp1d(x, LA_volume_combined_SR)
         yy_sg = savgol_filter(itp(xx), window_size, poly_order)
         LA_volume_combined_SR_smooth = yy_sg
-
+        
         itp = interp1d(x, LA_volume_combined_area)
         yy_sg = savgol_filter(itp(xx), window_size, poly_order)
         LA_volume_combined_area_smooth = yy_sg
@@ -1479,9 +1516,6 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
         la_diams_2Ch_itp = resample(la_diams_2Ch, max_frames)
         la_diams_4Ch_itp = resample(la_diams_4Ch, max_frames)
 
-        LA_volume_combined_SR = np.zeros(max_frames)
-        LA_volume_combined_area = np.zeros(max_frames)
-
         for fr in range(max_frames):
             # Simpson's rule
             d1d2 = la_diams_2Ch_itp[fr, :] * la_diams_4Ch_itp[fr, :]
@@ -1503,8 +1537,8 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
         itp = interp1d(x, LA_volume_combined_area)
         yy_sg = savgol_filter(itp(xx), window_size, poly_order)
         LA_volume_combined_area_smooth = yy_sg
-        LA_strain_circum_combined = np.zeros(20)
-        LA_strain_longitud_combined = np.zeros(20)
+        LA_strain_circum_combined = -1*np.ones(20)
+        LA_strain_longitud_combined = -1*np.ones(20)
 
         np.savetxt(os.path.join(results_dir, 'LA_volume_combined_SR.txt'),
                    LA_volume_combined_SR)
@@ -1522,9 +1556,10 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
                                 'LA_strain_longitud_combined.txt'),
                    LA_strain_longitud_combined)
     else:
-        LA_volume_combined_SR_smooth = np.zeros(20)
-        LA_volume_combined_area_smooth = np.zeros(20)
-        LA_strain_circum_combined = np.zeros(20)
+        LA_volume_combined_SR_smooth = -1*np.ones(N_frames_4Ch)
+        LA_volume_combined_area_smooth = -1*np.ones(N_frames_4Ch)
+        LA_strain_circum_combined = -1*np.ones(N_frames_4Ch)
+        LA_strain_longitud_combined = -1*np.ones(N_frames_4Ch)
 
     # =========================================================================
     # Peak volume
@@ -1533,8 +1568,8 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
     peak_LA_volume_SR_2ch = LA_volume_SR_2ch_smooth.max()
     peak_LA_volume_area_4ch = LA_volume_area_4ch_smooth.max()
     peak_LA_volume_SR_4ch = LA_volume_SR_4Ch_smooth.max()
-    peak_LA_volume_area_combined = LA_volume_combined_area.max()
-    peak_LA_volume_SR_combined = LA_volume_combined_SR.max()
+    peak_LA_volume_area_combined = LA_volume_combined_area_smooth.max()
+    peak_LA_volume_SR_combined = LA_volume_combined_SR_smooth.max()
     peak_RA_volume_area = RA_volumes_area_smooth.max()
     peak_RA_volume_SR = RA_volumes_SR_smooth.max()
 
@@ -1586,91 +1621,97 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
     plt.close('all')
 
     # interpolation
-    interp_folder = '/motion_repository/UKBiobank/AICMRQC_analysis/log/interp'
+    interp_folder = '/media/ec17/WINDOWS_DATA/Flow_project/Atrial_strain/log/interp'
     if not os.path.exists(interp_folder):
         os.mkdir(interp_folder)
     x_2ch = np.arange(N_frames_2Ch)
     x_4ch = np.arange(N_frames_4Ch)
     plt.figure()
-    plt.plot(LA_volume_SR_2ch_smooth)
-    plt.plot(x_2ch, LA_volume_SR_2ch, 's')
-    plt.legend()
+    plt.plot(LA_volume_SR_2ch, label='Original')
+    plt.scatter(x_2ch, LA_volume_SR_2ch)
+    plt.plot(LA_volume_SR_2ch_smooth, 'r', label='Smoothed')
     plt.title('LA volume Simpson 2ch')
+    plt.legend()
     plt.savefig(os.path.join(interp_folder,
                 f'LA_vol_Simpson2ch_{study_ID}.png'))
     plt.close('all')
 
     plt.figure()
-    plt.plot(LA_volume_SR_4Ch_smooth)
-    plt.plot(x_4ch, LA_volume_SR_4Ch, 's')
+    plt.plot(LA_volume_SR_4Ch, label='Original')
+    plt.scatter(x_4ch, LA_volume_SR_4Ch)
+    plt.plot(LA_volume_SR_4Ch_smooth, 'r', label='Smoothed')
     plt.legend()
     plt.title('LA volume Simpson 4ch')
     plt.savefig(os.path.join(interp_folder,
-                'LA_vol_Simpson4ch_{study_ID}.png'))
+                f'LA_vol_Simpson4ch_{study_ID}.png'))
     plt.close('all')
 
     plt.figure()
-    plt.plot(LA_volume_area_2ch_smooth)
-    plt.plot(x_2ch, LA_volume_area_2ch, 's')
+    plt.plot(LA_volume_area_2ch, label='Original')
+    plt.scatter(x_2ch, LA_volume_area_2ch)
+    plt.plot(LA_volume_area_2ch_smooth, 'r', label='Smoothed')
     plt.legend()
     plt.title('LA volume area 2ch')
-    plt.savefig(os.path.join(interp_folder, 'LA_vol_Area2ch_{study_ID}.png'))
+    plt.savefig(os.path.join(interp_folder, f'LA_vol_Area2ch_{study_ID}.png'))
     plt.close('all')
 
     plt.figure()
-    plt.plot(LA_volume_area_4ch_smooth)
-    plt.plot(x_4ch, LA_volume_area_4ch, 's')
+    plt.plot(LA_volume_area_4ch, label='Original')
+    plt.scatter(x_4ch, LA_volume_area_4ch)
+    plt.plot(LA_volume_area_4ch_smooth, 'r', label='Smoothed')
     plt.legend()
     plt.title('LA volume area 4ch')
-    plt.savefig(os.path.join(interp_folder, 'LA_vol_Area4ch_{study_ID}.png'))
+    plt.savefig(os.path.join(interp_folder, f'LA_vol_Area4ch_{study_ID}.png'))
     plt.close('all')
 
     plt.figure()
-    plt.plot(LA_volume_combined_SR_smooth)
-    plt.plot(x_2ch, LA_volume_combined_SR, 's')
+    plt.plot(LA_volume_combined_SR, label='Original')
+    plt.scatter(x_2ch, LA_volume_combined_SR)
+    plt.plot(LA_volume_combined_SR_smooth, 'r', label='Smoothed')
     plt.legend()
     plt.title('LA volume Simpson combined')
     plt.savefig(os.path.join(interp_folder,
-                'LA_vol_SimpsonCombined_{study_ID}.png'))
+                f'LA_vol_SimpsonCombined_{study_ID}.png'))
     plt.close('all')
 
     plt.figure()
-    plt.plot(LA_volume_combined_area_smooth)
-    plt.plot(x_4ch, LA_volume_combined_area, 's')
+    plt.plot(LA_volume_combined_area, label='Original')
+    plt.scatter(x_4ch, LA_volume_combined_area)
+    plt.plot(LA_volume_combined_area_smooth, 'r', label='Smoothed')
     plt.legend()
     plt.title('LA volume area combined')
     plt.savefig(os.path.join(interp_folder,
-                'LA_vol_AreaCombined_{study_ID}.png'))
+                f'LA_vol_AreaCombined_{study_ID}.png'))
     plt.close('all')
 
     plt.figure()
-    plt.plot(RA_volumes_SR_smooth)
-    plt.plot(x_4ch, RA_volumes_SR, 's')
+    plt.plot(RA_volumes_SR, label='Original')
+    plt.scatter(x_4ch, RA_volumes_SR)
+    plt.plot(RA_volumes_SR_smooth, 'r', label='Smoothed')
     plt.legend()
     plt.title('RA volume SR')
     plt.savefig(os.path.join(interp_folder,
-                'RA_vol_SR_{study_ID}.png'))
+                f'RA_vol_SR_{study_ID}.png'))
     plt.close('all')
 
     plt.figure()
-    plt.plot(RA_volumes_area_smooth)
-    plt.plot(x_4ch, RA_volumes_area, 's')
+    plt.plot(RA_volumes_area, label='Original')
+    plt.scatter(x_4ch, RA_volumes_area)
+    plt.plot(RA_volumes_area_smooth, 'r', label='Smoothed')
     plt.legend()
     plt.title('RA volume area')
     plt.savefig(os.path.join(interp_folder,
-                'RA_vol_Area_{study_ID}.png'))
+                f'RA_vol_Area_{study_ID}.png'))
     plt.close('all')
 
     try:
         # Circumferential strain
         plt.figure()
-        plt.plot(LA_strain_circum_2Ch, 's')
         plt.plot(LA_strain_circum_2Ch, label='2ch')
         plt.plot(LA_strain_circum_2Ch.argmax(),
-                 peak_LA_strain_circum_2ch_max, 'ro', label='Peak strain- max')
+                 peak_LA_strain_circum_2ch_max, 'ro', label='Peak strain - max')
         plt.plot(
             ES_frame, peak_LA_strain_circum_2ch_ES, 'b*', label='Peak strain - ES')
-        plt.plot(x_4ch, LA_strain_circum_4Ch, 'ko')
         plt.plot(LA_strain_circum_4Ch_smooth, 'k', label='4ch')
         plt.plot(LA_strain_circum_4Ch_smooth.argmax(),
                  peak_LA_strain_circum_4ch_max, 'ro')
@@ -1689,7 +1730,7 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
         plt.plot(LA_strain_longitud_2ch, label='2ch')
         plt.plot(LA_strain_longitud_2ch.argmax(),
                  peak_LA_strain_longitud_2ch_max, 'ro',
-                 label='Peak strain- max')
+                 label='Peak strain - max')
         plt.plot(ES_frame, peak_LA_strain_longitud_2ch_ES,
                  'b*', label='Peak strain - ES')
         plt.plot(LA_strain_longitud_4Ch_smooth, label='4ch')
@@ -1709,7 +1750,7 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
         plt.figure()
         plt.plot(RA_strain_circum_4Ch_smooth, label='Circum')
         plt.plot(RA_strain_circum_4Ch_smooth.argmax(),
-                 peak_RA_strain_circum_max, 'ro', label='Peak strain- max')
+                 peak_RA_strain_circum_max, 'ro', label='Peak strain - max')
         plt.plot(ES_frame_RA, peak_RA_strain_circum_ES, 'b*',
                  label='Peak strain - ES')
         plt.plot(RA_strain_longitud_4Ch_smooth, label='Longitud')
@@ -1723,57 +1764,63 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
 
         # interpolate
         plt.figure()
-        plt.plot(LA_strain_circum_2Ch_smooth)
-        plt.plot(x_2ch, LA_strain_circum_2Ch, 's')
+        plt.plot(LA_strain_circum_2Ch, label='Original')
+        plt.scatter(x_2ch, LA_strain_circum_2Ch)
+        plt.plot(LA_strain_circum_2Ch_smooth, 'r', label='Smoothed')
         plt.legend()
         plt.title('LA strain circum 2ch')
         plt.savefig(os.path.join(interp_folder,
-                    'LA_strain_circum2ch_{study_ID}.png'))
+                    f'LA_strain_circum2ch_{study_ID}.png'))
         plt.close('all')
 
         plt.figure()
-        plt.plot(LA_strain_circum_4Ch_smooth)
-        plt.plot(x_4ch, LA_strain_circum_4Ch, 's')
+        plt.plot(LA_strain_circum_4Ch, label='Original')
+        plt.scatter(x_4ch, LA_strain_circum_4Ch)
+        plt.plot(LA_strain_circum_4Ch_smooth, 'r', label='Smoothed')
         plt.legend()
         plt.title('LA strain circum 4ch')
         plt.savefig(os.path.join(interp_folder,
-                    'LA_strain_circum4ch_{study_ID}.png'))
+                    f'LA_strain_circum4ch_{study_ID}.png'))
         plt.close('all')
 
         plt.figure()
-        plt.plot(LA_strain_longitud_2ch_smooth)
-        plt.plot(x_2ch, LA_strain_longitud_2ch, 's')
+        plt.plot(LA_strain_longitud_2ch, label='Original')
+        plt.scatter(x_2ch, LA_strain_longitud_2ch)
+        plt.plot(LA_strain_longitud_2ch_smooth, 'r', label='Smoothed')
         plt.legend()
         plt.title('LA strain longitud 2ch')
         plt.savefig(os.path.join(interp_folder,
-                    'LA_strain_longitud2ch_{study_ID}.png'))
+                    f'LA_strain_longitud2ch_{study_ID}.png'))
         plt.close('all')
 
         plt.figure()
-        plt.plot(LA_strain_longitud_4Ch)
-        plt.plot(x_4ch, LA_strain_longitud_4Ch_smooth, 's')
+        plt.plot(LA_strain_longitud_4Ch, label='Original')
+        plt.scatter(x_4ch, LA_strain_longitud_4Ch_smooth)
+        plt.plot(LA_strain_longitud_4Ch_smooth, 'r', label='Smoothed')
         plt.legend()
         plt.title('LA strain longitud 4ch')
         plt.savefig(os.path.join(interp_folder,
-                    'LA_strain_longitud4ch_{study_ID}.png'))
+                    f'LA_strain_longitud4ch_{study_ID}.png'))
         plt.close('all')
 
         plt.figure()
-        plt.plot(RA_strain_circum_4Ch_smooth)
-        plt.plot(x_2ch, RA_strain_circum_4Ch, 's')
+        plt.plot(RA_strain_circum_4Ch, label='Original')
+        plt.scatter(x_2ch, RA_strain_circum_4Ch)
+        plt.plot(RA_strain_circum_4Ch_smooth, 'r', label='Smoothed')
         plt.legend()
         plt.title('RA strain circum')
         plt.savefig(os.path.join(interp_folder,
-                    'RA_strain_circum_{study_ID}.png'))
+                    f'RA_strain_circum_{study_ID}.png'))
         plt.close('all')
 
         plt.figure()
-        plt.plot(RA_strain_longitud_4Ch_smooth)
-        plt.plot(x_4ch, RA_strain_longitud_4Ch, 's')
+        plt.plot(RA_strain_longitud_4Ch, label='Original')
+        plt.scatter(x_4ch, RA_strain_longitud_4Ch)
+        plt.plot(RA_strain_longitud_4Ch_smooth, 'r', label='Smoothed')
         plt.legend()
         plt.title('RA strain longitud')
         plt.savefig(os.path.join(interp_folder,
-                    'RA_strain_longitud_{study_ID}.png'))
+                    f'RA_strain_longitud_{study_ID}.png'))
         plt.close('all')
 
         # f, ax = plt.subplots()
@@ -1826,8 +1873,7 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
 
     vols = np.reshape(vols, [1, 25])
     df = pd.DataFrame(vols)
-    df.to_csv(os.path.join(results_dir, 'atrial_peak_params.csv'),
-              header=['eid', 'LA_vol_area_2ch', 'LA_vol_SR_2ch',
+    header = ['eid', 'LA_vol_area_2ch', 'LA_vol_SR_2ch',
                       'LA_vol_area_4ch', 'LA_vol_SR_4ch', 'LA_vol_area_combo',
                       'LA_vol_SR_combo', 'LA_strain_circum_2ch_ES',
                       'LA_strain_circum_2ch_max', 'LA_strain_circum_4ch_ES',
@@ -1839,4 +1885,8 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
                       'LA_strain_long_combo_ES', 'LA_strain_long_combo_max',
                       'RA_volume_area', 'RA_volume_SR', 'RA_strain_circum_ES',
                       'RA_strain_circum_max', 'RA_strain_long_ES',
-                      'RA_strain_long_max'], index=False)
+                      'RA_strain_long_max']
+    df.to_csv(os.path.join(results_dir, 'atrial_peak_params.csv'),
+              header=header, index=False)
+    
+    return df, header
