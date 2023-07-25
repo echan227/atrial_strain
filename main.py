@@ -19,7 +19,7 @@ log_txt_file = os.path.join(log_dir, f"compute_atrial_strain_{time_file}.txt")
 logger = set_logger(log_txt_file)
 logger.info("Starting computing atrial parameters for lax\n")
 
-study_IDs = study_IDs[1:3]
+study_IDs = study_IDs[:3]
 
 # Whether to create new csv or append to an existing one
 overwrite_summary_csv = True

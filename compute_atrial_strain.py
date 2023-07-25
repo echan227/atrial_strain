@@ -19,11 +19,11 @@ from scipy.interpolate import interp1d
 from scipy.signal import savgol_filter
 from scipy.signal import resample
 import numpy as np
-debug = True
+debug = False
 Nsegments_length = 15
 
 # Enable interactive mode in matplotlib
-plt.ion()
+# plt.ion()
 # =============================================================================
 # Function
 # =============================================================================
@@ -32,20 +32,36 @@ plt.ion()
 def getLargestCC(segmentation):
     nb_labels = np.unique(segmentation)[1:]
     out_image = np.zeros_like(segmentation)
-    for ncc in nb_labels:
-        _aux = np.squeeze(segmentation == ncc).astype(
-            float)  # get myocardial labe
-        if ncc == 2 and (1.0 and 2.0 in np.unique(segmentation)):
+
+    # Loop over labels, leaving myocardium for last
+    for ncc in [x for x in nb_labels if x != 2]:
+        _aux = np.squeeze(segmentation == ncc).astype(float)  
+        labels = label(_aux)
+        assert (labels.max() != 0)  # assume at least 1 CC
+        largestCC = labels == np.argmax(np.bincount(labels.flat)[1:]) + 1
+        out_image += largestCC * ncc
+
+    # Handle myocardium last in case of overlaps
+    if 2 in nb_labels:
+        ncc = 2
+        _aux = np.squeeze(segmentation == ncc).astype(float)  
+        labels = label(_aux)
+
+        # If myocardium has multiple connected components, dilate to connect components
+        if (1.0 and 2.0 in np.unique(segmentation)) and np.unique(labels).shape[0] > 2:
             kernel = np.ones((2, 2), np.uint8)
             _aux = cv2.dilate(_aux, kernel, iterations=2)
             cnt_myo_seg_dil = measure.find_contours(_aux, 0.8)
             cnt_myo_seg = measure.find_contours(_aux, 0.8)
             if len(cnt_myo_seg_dil) > 1 and len(cnt_myo_seg) > 1:
                 _aux = dilate_LV_myo(segmentation)
-        labels = label(_aux)
+            labels = label(_aux)
         assert (labels.max() != 0)  # assume at least 1 CC
         largestCC = labels == np.argmax(np.bincount(labels.flat)[1:]) + 1
-        out_image += largestCC * ncc
+
+        # If myo overlaps other labels, it will overwrite
+        out_image[largestCC] = 2
+
     return out_image
 
 
@@ -130,18 +146,6 @@ def get_atrial_circumference(contours, atria_edge1, atria_edge2, top_atrium, fr,
                 (contours[indice1:, :], contours[:indice2+1, :]), axis=0
             )
 
-    # if indice1 > indice2:
-    #     # make sure top of atrium is in contour
-    #     if indice1 < indice3 < indice2:
-    #         indice1, indice2 = indice2, indice1
-    #     contour_atria = np.concatenate(
-    #         (contours[indice1:, :], contours[:indice2, :]), axis=0)
-    # else:
-    #     # make sure top of atrium is in contour
-    #     if not indice1 < indice3 < indice2:
-    #         indice1, indice2 = indice2, indice1
-    #     contour_atria = contours[indice1:indice2, :]
-
     # calculate the length of the line using the distance formula
     total_length = 0
     if debug:
@@ -192,6 +196,14 @@ def get_right_atrial_volumes(seg, _fr, _pointsRV, logger):
 
     contours_RV = measure.find_contours(rv_seg, 0.8)
     contours_RV = contours_RV[0]
+
+    # Fit a spline to smooth out the atrium
+    n_samples = 100
+    x = binarymatrix(_contours_RA)
+    spl, u = splprep(x.T, s=5, quiet=2, nest=-1)
+    u_new = np.linspace(u.min(), u.max(), n_samples)
+    _contours_RA = np.zeros([n_samples, 2])
+    _contours_RA[:, 0], _contours_RA[:, 1] = splev(u_new, spl)
 
     # Compute distance between mid_valve and every point in contours
     dist = distance.cdist(_contours_RA, [mid_valve_RV])
@@ -412,6 +424,14 @@ def get_left_atrial_volumes(seg, _seq, _fr, _points, logger):
     contours = measure.find_contours(_atria_seg, 0.8)
     contours = contours[0]
 
+    # Fit a spline to smooth out the atrium
+    n_samples = contours.shape[0]
+    x = binarymatrix(contours)
+    spl, u = splprep(x.T, s=5, quiet=2, nest=-1)
+    u_new = np.linspace(u.min(), u.max(), n_samples)
+    contours = np.zeros([n_samples, 2])
+    contours[:, 0], contours[:, 1] = splev(u_new, spl)
+
     # Compute distance between mid_valve and every point in contours
     dist = distance.cdist(contours, [_mid_valve])
     ind_mitral_valve = dist.argmin()
@@ -519,6 +539,7 @@ def get_left_atrial_volumes(seg, _seq, _fr, _points, logger):
     if debug:
         plt.figure()
         plt.plot(contour_smth[:, 0], contour_smth[:, 1], 'r-')
+        # plt.scatter(contour_smth[:, 0], contour_smth[:, 1])
         plt.plot(final_atrial_edge2[0], final_atrial_edge2[1], 'y*', label='atrium edge 2')
         plt.plot(final_atrial_edge1[0], final_atrial_edge1[1], 'm*', label='atrium edge 1')
         plt.plot(final_perp_top_atria[0], final_perp_top_atria[1], 'ko', label='perp top')
@@ -893,8 +914,9 @@ def detect_RV_points(_seg, septal_mv, logger):
         # fit b-spline curve to skeleton, sample fixed number of points
         tck, u = splprep(sk_pts.T, s=10.0, per=1, quiet=2)
 
-        u_new = np.linspace(u.min(), u.max(), 80)
-        _cl_pts = np.zeros([80, 2])
+        num_points = sk_pts.shape[0]  # 80
+        u_new = np.linspace(u.min(), u.max(), num_points)
+        _cl_pts = np.zeros([num_points, 2])
         _cl_pts[:, 0], _cl_pts[:, 1] = splev(u_new, tck)
 
     dist_rv = distance.cdist(_cl_pts, [_lv_valve])
@@ -914,6 +936,16 @@ def detect_RV_points(_seg, septal_mv, logger):
         if AC > 10 and BC > 10:
             _area[ai] = np.abs(AB ** 2 + BC ** 2 - AC ** 2)
     _free_rv_point = _cl_pts[_ind_free_wall[_area.argmin()], :]
+
+    if debug:
+        plt.figure()
+        plt.plot(_cl_pts[:, 1], _cl_pts[:, 0])
+        plt.plot(_free_rv_point[1], _free_rv_point[0], 'r*', label='free rv')
+        plt.plot(_apex_RV[1], _apex_RV[0], 'b*', label='apex rv')
+        plt.plot(_lv_valve[1], _lv_valve[0], 'k*', label='rvlv')
+        plt.legend()
+        plt.title('RV')
+        plt.close('all')
 
     return np.asarray(_apex_RV), np.asarray(_lv_valve), np.asarray(_free_rv_point)
 
@@ -1041,6 +1073,9 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
                         # anterior_2Ch
                         LV_atria_points_2Ch[fr, 8, :] = points_LV[3, :]
 
+                        # Fit a spline to smooth contour a little
+                        # num_points = 
+
                         # compute atrial circumference
                         LA_circumf_2Ch = get_atrial_circumference(contours_LA, [points_non_rotate[3, 1], points_non_rotate[3, 0]], [
                             points_non_rotate[4, 1], points_non_rotate[4, 0]], [points_non_rotate[1, 1], points_non_rotate[1, 0]], fr, study_ID)
@@ -1079,6 +1114,7 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
                 np.savetxt(os.path.join(
                     results_dir, 'LA_strain_longitud_2ch_smooth.txt'), LA_strain_longitud_2ch_smooth)
             except:
+                logger.error('Problem calculating 2ch strain')
                 QC_atria_2Ch = 1
     else:
         QC_atria_2Ch = 1
@@ -1621,148 +1657,150 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
     plt.close('all')
 
     # interpolation
-    interp_folder = '/media/ec17/WINDOWS_DATA/Flow_project/Atrial_strain/log/interp'
-    if not os.path.exists(interp_folder):
-        os.mkdir(interp_folder)
-    x_2ch = np.arange(N_frames_2Ch)
-    x_4ch = np.arange(N_frames_4Ch)
-    plt.figure()
-    plt.plot(LA_volume_SR_2ch, label='Original')
-    plt.scatter(x_2ch, LA_volume_SR_2ch)
-    plt.plot(LA_volume_SR_2ch_smooth, 'r', label='Smoothed')
-    plt.title('LA volume Simpson 2ch')
-    plt.legend()
-    plt.savefig(os.path.join(interp_folder,
-                f'LA_vol_Simpson2ch_{study_ID}.png'))
-    plt.close('all')
-
-    plt.figure()
-    plt.plot(LA_volume_SR_4Ch, label='Original')
-    plt.scatter(x_4ch, LA_volume_SR_4Ch)
-    plt.plot(LA_volume_SR_4Ch_smooth, 'r', label='Smoothed')
-    plt.legend()
-    plt.title('LA volume Simpson 4ch')
-    plt.savefig(os.path.join(interp_folder,
-                f'LA_vol_Simpson4ch_{study_ID}.png'))
-    plt.close('all')
-
-    plt.figure()
-    plt.plot(LA_volume_area_2ch, label='Original')
-    plt.scatter(x_2ch, LA_volume_area_2ch)
-    plt.plot(LA_volume_area_2ch_smooth, 'r', label='Smoothed')
-    plt.legend()
-    plt.title('LA volume area 2ch')
-    plt.savefig(os.path.join(interp_folder, f'LA_vol_Area2ch_{study_ID}.png'))
-    plt.close('all')
-
-    plt.figure()
-    plt.plot(LA_volume_area_4ch, label='Original')
-    plt.scatter(x_4ch, LA_volume_area_4ch)
-    plt.plot(LA_volume_area_4ch_smooth, 'r', label='Smoothed')
-    plt.legend()
-    plt.title('LA volume area 4ch')
-    plt.savefig(os.path.join(interp_folder, f'LA_vol_Area4ch_{study_ID}.png'))
-    plt.close('all')
-
-    plt.figure()
-    plt.plot(LA_volume_combined_SR, label='Original')
-    plt.scatter(x_2ch, LA_volume_combined_SR)
-    plt.plot(LA_volume_combined_SR_smooth, 'r', label='Smoothed')
-    plt.legend()
-    plt.title('LA volume Simpson combined')
-    plt.savefig(os.path.join(interp_folder,
-                f'LA_vol_SimpsonCombined_{study_ID}.png'))
-    plt.close('all')
-
-    plt.figure()
-    plt.plot(LA_volume_combined_area, label='Original')
-    plt.scatter(x_4ch, LA_volume_combined_area)
-    plt.plot(LA_volume_combined_area_smooth, 'r', label='Smoothed')
-    plt.legend()
-    plt.title('LA volume area combined')
-    plt.savefig(os.path.join(interp_folder,
-                f'LA_vol_AreaCombined_{study_ID}.png'))
-    plt.close('all')
-
-    plt.figure()
-    plt.plot(RA_volumes_SR, label='Original')
-    plt.scatter(x_4ch, RA_volumes_SR)
-    plt.plot(RA_volumes_SR_smooth, 'r', label='Smoothed')
-    plt.legend()
-    plt.title('RA volume SR')
-    plt.savefig(os.path.join(interp_folder,
-                f'RA_vol_SR_{study_ID}.png'))
-    plt.close('all')
-
-    plt.figure()
-    plt.plot(RA_volumes_area, label='Original')
-    plt.scatter(x_4ch, RA_volumes_area)
-    plt.plot(RA_volumes_area_smooth, 'r', label='Smoothed')
-    plt.legend()
-    plt.title('RA volume area')
-    plt.savefig(os.path.join(interp_folder,
-                f'RA_vol_Area_{study_ID}.png'))
-    plt.close('all')
-
-    try:
-        # Circumferential strain
+    if debug:
+        interp_folder = '/media/ec17/WINDOWS_DATA/Flow_project/Atrial_strain/log/interp'
+        if not os.path.exists(interp_folder):
+            os.mkdir(interp_folder)
+        x_2ch = np.arange(N_frames_2Ch)
+        x_4ch = np.arange(N_frames_4Ch)
         plt.figure()
-        plt.plot(LA_strain_circum_2Ch, label='2ch')
-        plt.plot(LA_strain_circum_2Ch.argmax(),
-                 peak_LA_strain_circum_2ch_max, 'ro', label='Peak strain - max')
-        plt.plot(
-            ES_frame, peak_LA_strain_circum_2ch_ES, 'b*', label='Peak strain - ES')
-        plt.plot(LA_strain_circum_4Ch_smooth, 'k', label='4ch')
-        plt.plot(LA_strain_circum_4Ch_smooth.argmax(),
-                 peak_LA_strain_circum_4ch_max, 'ro')
-        plt.plot(ES_frame, peak_LA_strain_circum_4ch_ES, 'b*')
-        plt.plot(LA_strain_circum_combined, label='Combined')
-        plt.plot(LA_strain_circum_combined.argmax(),
-                 peak_LA_strain_circum_combined_max, 'ro')
-        plt.plot(ES_frame, peak_LA_strain_circum_combined_ES, 'b*')
+        plt.plot(LA_volume_SR_2ch, label='Original')
+        plt.scatter(x_2ch, LA_volume_SR_2ch)
+        plt.plot(LA_volume_SR_2ch_smooth, 'r', label='Smoothed')
+        plt.title('LA volume Simpson 2ch')
         plt.legend()
-        plt.title('LA Circumferential Strain')
-        plt.savefig(os.path.join(results_dir, 'LA_circum_strain.png'))
+        plt.savefig(os.path.join(interp_folder,
+                    f'LA_vol_Simpson2ch_{study_ID}.png'))
         plt.close('all')
 
-        # Longitudinal strain
         plt.figure()
-        plt.plot(LA_strain_longitud_2ch, label='2ch')
-        plt.plot(LA_strain_longitud_2ch.argmax(),
-                 peak_LA_strain_longitud_2ch_max, 'ro',
-                 label='Peak strain - max')
-        plt.plot(ES_frame, peak_LA_strain_longitud_2ch_ES,
-                 'b*', label='Peak strain - ES')
-        plt.plot(LA_strain_longitud_4Ch_smooth, label='4ch')
-        plt.plot(LA_strain_longitud_4Ch_smooth.argmax(),
-                 peak_LA_strain_longitud_4ch_max, 'ro')
-        plt.plot(ES_frame, peak_LA_strain_longitud_4ch_ES, 'b*')
-        plt.plot(LA_strain_longitud_combined, label='Combined')
-        plt.plot(LA_strain_longitud_combined.argmax(),
-                 peak_LA_strain_longitud_combined_max, 'ro')
-        plt.plot(ES_frame, peak_LA_strain_longitud_combined_ES, 'b*')
+        plt.plot(LA_volume_SR_4Ch, label='Original')
+        plt.scatter(x_4ch, LA_volume_SR_4Ch)
+        plt.plot(LA_volume_SR_4Ch_smooth, 'r', label='Smoothed')
         plt.legend()
-        plt.title('LA Longitudinal Strain')
-        plt.savefig(os.path.join(results_dir, 'LA_longitud_strain.png'))
+        plt.title('LA volume Simpson 4ch')
+        plt.savefig(os.path.join(interp_folder,
+                    f'LA_vol_Simpson4ch_{study_ID}.png'))
         plt.close('all')
 
-        # RA strain
         plt.figure()
-        plt.plot(RA_strain_circum_4Ch_smooth, label='Circum')
-        plt.plot(RA_strain_circum_4Ch_smooth.argmax(),
-                 peak_RA_strain_circum_max, 'ro', label='Peak strain - max')
-        plt.plot(ES_frame_RA, peak_RA_strain_circum_ES, 'b*',
-                 label='Peak strain - ES')
-        plt.plot(RA_strain_longitud_4Ch_smooth, label='Longitud')
-        plt.plot(RA_strain_longitud_4Ch_smooth.argmax(),
-                 peak_RA_strain_longitud_max, 'ro')
-        plt.plot(ES_frame_RA, peak_RA_strain_longitud_ES, 'b*')
+        plt.plot(LA_volume_area_2ch, label='Original')
+        plt.scatter(x_2ch, LA_volume_area_2ch)
+        plt.plot(LA_volume_area_2ch_smooth, 'r', label='Smoothed')
         plt.legend()
-        plt.title('RA Strain')
-        plt.savefig(os.path.join(results_dir, 'RA_strain.png'))
+        plt.title('LA volume area 2ch')
+        plt.savefig(os.path.join(interp_folder, f'LA_vol_Area2ch_{study_ID}.png'))
         plt.close('all')
 
-        # interpolate
+        plt.figure()
+        plt.plot(LA_volume_area_4ch, label='Original')
+        plt.scatter(x_4ch, LA_volume_area_4ch)
+        plt.plot(LA_volume_area_4ch_smooth, 'r', label='Smoothed')
+        plt.legend()
+        plt.title('LA volume area 4ch')
+        plt.savefig(os.path.join(interp_folder, f'LA_vol_Area4ch_{study_ID}.png'))
+        plt.close('all')
+
+        plt.figure()
+        plt.plot(LA_volume_combined_SR, label='Original')
+        plt.scatter(x_2ch, LA_volume_combined_SR)
+        plt.plot(LA_volume_combined_SR_smooth, 'r', label='Smoothed')
+        plt.legend()
+        plt.title('LA volume Simpson combined')
+        plt.savefig(os.path.join(interp_folder,
+                    f'LA_vol_SimpsonCombined_{study_ID}.png'))
+        plt.close('all')
+
+        plt.figure()
+        plt.plot(LA_volume_combined_area, label='Original')
+        plt.scatter(x_4ch, LA_volume_combined_area)
+        plt.plot(LA_volume_combined_area_smooth, 'r', label='Smoothed')
+        plt.legend()
+        plt.title('LA volume area combined')
+        plt.savefig(os.path.join(interp_folder,
+                    f'LA_vol_AreaCombined_{study_ID}.png'))
+        plt.close('all')
+
+        plt.figure()
+        plt.plot(RA_volumes_SR, label='Original')
+        plt.scatter(x_4ch, RA_volumes_SR)
+        plt.plot(RA_volumes_SR_smooth, 'r', label='Smoothed')
+        plt.legend()
+        plt.title('RA volume SR')
+        plt.savefig(os.path.join(interp_folder,
+                    f'RA_vol_SR_{study_ID}.png'))
+        plt.close('all')
+
+        plt.figure()
+        plt.plot(RA_volumes_area, label='Original')
+        plt.scatter(x_4ch, RA_volumes_area)
+        plt.plot(RA_volumes_area_smooth, 'r', label='Smoothed')
+        plt.legend()
+        plt.title('RA volume area')
+        plt.savefig(os.path.join(interp_folder,
+                    f'RA_vol_Area_{study_ID}.png'))
+        plt.close('all')
+
+    # try:
+    # Circumferential strain
+    plt.figure()
+    plt.plot(LA_strain_circum_2Ch, label='2ch')
+    plt.plot(LA_strain_circum_2Ch.argmax(),
+                peak_LA_strain_circum_2ch_max, 'ro', label='Peak strain - max')
+    plt.plot(
+        ES_frame, peak_LA_strain_circum_2ch_ES, 'b*', label='Peak strain - ES')
+    plt.plot(LA_strain_circum_4Ch_smooth, 'k', label='4ch')
+    plt.plot(LA_strain_circum_4Ch_smooth.argmax(),
+                peak_LA_strain_circum_4ch_max, 'ro')
+    plt.plot(ES_frame, peak_LA_strain_circum_4ch_ES, 'b*')
+    plt.plot(LA_strain_circum_combined, label='Combined')
+    plt.plot(LA_strain_circum_combined.argmax(),
+                peak_LA_strain_circum_combined_max, 'ro')
+    plt.plot(ES_frame, peak_LA_strain_circum_combined_ES, 'b*')
+    plt.legend()
+    plt.title('LA Circumferential Strain')
+    plt.savefig(os.path.join(results_dir, 'LA_circum_strain.png'))
+    plt.close('all')
+
+    # Longitudinal strain
+    plt.figure()
+    plt.plot(LA_strain_longitud_2ch, label='2ch')
+    plt.plot(LA_strain_longitud_2ch.argmax(),
+                peak_LA_strain_longitud_2ch_max, 'ro',
+                label='Peak strain - max')
+    plt.plot(ES_frame, peak_LA_strain_longitud_2ch_ES,
+                'b*', label='Peak strain - ES')
+    plt.plot(LA_strain_longitud_4Ch_smooth, label='4ch')
+    plt.plot(LA_strain_longitud_4Ch_smooth.argmax(),
+                peak_LA_strain_longitud_4ch_max, 'ro')
+    plt.plot(ES_frame, peak_LA_strain_longitud_4ch_ES, 'b*')
+    plt.plot(LA_strain_longitud_combined, label='Combined')
+    plt.plot(LA_strain_longitud_combined.argmax(),
+                peak_LA_strain_longitud_combined_max, 'ro')
+    plt.plot(ES_frame, peak_LA_strain_longitud_combined_ES, 'b*')
+    plt.legend()
+    plt.title('LA Longitudinal Strain')
+    plt.savefig(os.path.join(results_dir, 'LA_longitud_strain.png'))
+    plt.close('all')
+
+    # RA strain
+    plt.figure()
+    plt.plot(RA_strain_circum_4Ch_smooth, label='Circum')
+    plt.plot(RA_strain_circum_4Ch_smooth.argmax(),
+                peak_RA_strain_circum_max, 'ro', label='Peak strain - max')
+    plt.plot(ES_frame_RA, peak_RA_strain_circum_ES, 'b*',
+                label='Peak strain - ES')
+    plt.plot(RA_strain_longitud_4Ch_smooth, label='Longitud')
+    plt.plot(RA_strain_longitud_4Ch_smooth.argmax(),
+                peak_RA_strain_longitud_max, 'ro')
+    plt.plot(ES_frame_RA, peak_RA_strain_longitud_ES, 'b*')
+    plt.legend()
+    plt.title('RA Strain')
+    plt.savefig(os.path.join(results_dir, 'RA_strain.png'))
+    plt.close('all')
+
+    # interpolate
+    if debug:
         plt.figure()
         plt.plot(LA_strain_circum_2Ch, label='Original')
         plt.scatter(x_2ch, LA_strain_circum_2Ch)
@@ -1822,21 +1860,10 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
         plt.savefig(os.path.join(interp_folder,
                     f'RA_strain_longitud_{study_ID}.png'))
         plt.close('all')
-
-        # f, ax = plt.subplots()
-        # ax.plot(RA_strain_circum_4Ch_smooth)
-        # ax.plot(RA_strain_circum_4Ch_smooth.argmax(),
-        #         RA_strain_circum_4Ch_smooth[RA_strain_circum_4Ch_smooth.argmax()], 'ro')
-        # ax.annotate('peak RA strain', (RA_strain_circum_4Ch_smooth.argmax(),
-        #             RA_strain_circum_4Ch_smooth[RA_strain_circum_4Ch_smooth.argmax()]))
-        # ax.set_title('{}: RA strain 4Ch'.format(study_ID))
-        # f.savefig(os.path.join(results_dir, 'RA_strain_circum_4Ch.png'))
-        # plt.close('all')
-
-    except Exception:
-        logger.error(
-            'Problem in calculating strain with subject {}'.format(study_ID))
-        QC_atria_4Ch_LA = 1
+    # except Exception:
+    #     logger.error(
+    #         'Problem in calculating strain with subject {}'.format(study_ID))
+    #     QC_atria_4Ch_LA = 1
 
     # =========================================================================
     # SAVE RESULTS
