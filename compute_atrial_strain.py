@@ -9,7 +9,7 @@ from skimage import measure
 import cv2
 from collections import defaultdict
 from numpy.linalg import norm
-from scipy.interpolate import splprep, splev
+from scipy.interpolate import splprep, splev, splrep
 from scipy.ndimage.morphology import binary_closing as closing
 from skimage.morphology import skeletonize
 from collections import Counter
@@ -24,9 +24,25 @@ Nsegments_length = 15
 
 # Enable interactive mode in matplotlib
 # plt.ion()
-# =============================================================================
-# Function
-# =============================================================================
+
+
+def smooth_curve_1d(curve, num_frames, s, num_points=None, x_values=None):
+    """Smooth via spline interpolation, with smoothing condition s
+    Use num_points to increase number of points in curve
+    If changing number of points, also change x axis values to match"""
+    x = np.linspace(0, num_frames - 1, num_frames)
+
+    if num_points is not None:
+        xx = np.linspace(x.min(), x.max(), num_points)
+        curve_interp = interp1d(x, curve, kind='linear')(xx)
+        x_interp = interp1d(x, x_values, kind='linear')(xx)
+        spl = splrep(xx, curve_interp, s=s)
+        curve_smooth = splev(xx, spl)
+        return curve_smooth, x_interp
+    else:
+        spl = splrep(x, curve, s=s)
+        curve_smooth = splev(x, spl)
+        return curve_smooth
 
 
 def getLargestCC(segmentation):
@@ -987,9 +1003,21 @@ def depth_first_search(G, v, seen=None, path=None):
     return paths
 
 
-def compute_atria_params(study_ID, subject_dir, results_dir, logger):
-    window_size, poly_order = 7, 3
+def calculate_tt(seg_file):
+    nim = nib.load(seg_file)
+    nim_array = nim.get_fdata()
+    nim_hdr = nim.header
+    pix_dim = nim_hdr["pixdim"][4]
+    tt = pix_dim * np.array(range(0, nim_array.shape[3]))
+    return tt
+
+
+def compute_atria_params(study_ID, subject_dir, results_dir, logger, recalculate_points=False):
+    window_size, poly_order = 9, 3
     QC_atria_2Ch, QC_atria_4Ch_LA, QC_atria_4Ch_RA = 0, 0, 0
+    s = 300  # Spline smoothing parameter for the strain curves
+    p = 2  # Multiplier for increasing number of points in strain curve
+    save_2ch_dict_flag = False  # Whether to save 2ch dict and points
 
     # =========================================================================
     # la_2Ch - calculate area and points
@@ -1003,6 +1031,7 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
         if len(la_seg_2Ch.shape) == 4:
             la_seg_2Ch = la_seg_2Ch[:, :, 0, :]
         _, _, N_frames_2Ch = la_seg_2Ch.shape
+        tt_2ch_orig = calculate_tt(filename_la_seg_2Ch)
 
         # Get largest connected components
         for fr in range(N_frames_2Ch):
@@ -1016,10 +1045,9 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
                     la_seg_2Ch[:, :, fr] == 3).astype(float)) * area_per_voxel
 
         # Compute 2ch params needed for simpson's rule
-        save_2ch_dict_flag = False  # Whether to save 2ch dict and points
         dict_2ch_file = os.path.join(  # dict of length values
             results_dir, f'{study_ID}_2ch_length_dict.npy')
-        if os.path.exists(dict_2ch_file):
+        if os.path.exists(dict_2ch_file) and not recalculate_points:
             # If already saved, load the dictionary
             logger.info('Loading pre-saved dictionary of 2ch params')
             dict_2ch = np.load(dict_2ch_file, allow_pickle=True).item()
@@ -1073,9 +1101,6 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
                         # anterior_2Ch
                         LV_atria_points_2Ch[fr, 8, :] = points_LV[3, :]
 
-                        # Fit a spline to smooth contour a little
-                        # num_points = 
-
                         # compute atrial circumference
                         LA_circumf_2Ch = get_atrial_circumference(contours_LA, [points_non_rotate[3, 1], points_non_rotate[3, 0]], [
                             points_non_rotate[4, 1], points_non_rotate[4, 0]], [points_non_rotate[1, 1], points_non_rotate[1, 0]], fr, study_ID)
@@ -1090,10 +1115,9 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
         # =====================================================================
         # Compute 2ch strain
         # =====================================================================
-        LA_strain_circum_2Ch = -1*np.ones(N_frames_2Ch)
-        LA_strain_longitud_2ch = -1*np.ones(N_frames_2Ch)
         if QC_atria_2Ch == 0:
             try:
+                # Strain
                 LA_strain_circum_2Ch = get_strain(LA_circumf_cycle_2Ch)
                 LA_strain_longitud_2ch = get_strain(length_top_2Ch)
                 np.savetxt(os.path.join(
@@ -1101,23 +1125,49 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
                 np.savetxt(os.path.join(
                     results_dir, 'LA_strain_longitud_2Ch.txt'), LA_strain_longitud_2ch)
 
-                x = np.linspace(0, N_frames_2Ch - 1, N_frames_2Ch)
-                xx = np.linspace(np.min(x), np.max(x), N_frames_2Ch)
-                itp = interp1d(x, LA_strain_circum_2Ch)
-                yy_sg = savgol_filter(itp(xx), window_size, poly_order)
-                LA_strain_circum_2Ch_smooth = yy_sg
-                itp = interp1d(x, LA_strain_longitud_2ch)
-                yy_sg = savgol_filter(itp(xx), window_size, poly_order)
-                LA_strain_longitud_2ch_smooth = yy_sg
+                # x = np.linspace(0, N_frames_2Ch - 1, N_frames_2Ch)
+                # xx = np.linspace(np.min(x), np.max(x), N_frames_2Ch)
+                # itp = interp1d(x, LA_strain_circum_2Ch)
+                # yy_sg = savgol_filter(itp(xx), window_size, poly_order)
+                # LA_strain_circum_2Ch_smooth = yy_sg
+                # itp = interp1d(x, LA_strain_longitud_2ch)
+                # yy_sg = savgol_filter(itp(xx), window_size, poly_order)
+                # LA_strain_longitud_2ch_smooth = yy_sg
+                LA_strain_circum_2Ch_smooth, tt_2ch = smooth_curve_1d(LA_strain_circum_2Ch, N_frames_2Ch, s, N_frames_2Ch*p, tt_2ch_orig)
+                LA_strain_longitud_2ch_smooth, tt_2ch = smooth_curve_1d(LA_strain_longitud_2ch, N_frames_2Ch, s, N_frames_2Ch*p, tt_2ch_orig)
                 np.savetxt(os.path.join(
                     results_dir, 'LA_strain_circum_2Ch_smooth.txt'), LA_strain_circum_2Ch_smooth)
                 np.savetxt(os.path.join(
                     results_dir, 'LA_strain_longitud_2ch_smooth.txt'), LA_strain_longitud_2ch_smooth)
+
+                # Strain rate
+                LA_strainRate_circum_2Ch = np.gradient(LA_strain_circum_2Ch_smooth, tt_2ch)
+                x = np.linspace(0, N_frames_2Ch*p - 1, N_frames_2Ch*p)
+                xx = np.linspace(np.min(x), np.max(x), N_frames_2Ch*p)
+                itp = interp1d(x, LA_strainRate_circum_2Ch)
+                LA_strainRate_circum_2Ch_smooth = savgol_filter(itp(xx), window_size, poly_order)
+                np.savetxt(os.path.join(
+                    results_dir, 'LA_strainRate_circum_2Ch.txt'), LA_strainRate_circum_2Ch)
+                np.savetxt(os.path.join(
+                    results_dir, 'LA_strainRate_circum_2Ch_smooth.txt'), LA_strainRate_circum_2Ch_smooth)
+
+                LA_strainRate_longitud_2ch = np.gradient(LA_strain_longitud_2ch_smooth, tt_2ch)
+                itp = interp1d(x, LA_strainRate_longitud_2ch)
+                LA_strainRate_longitud_2ch_smooth = savgol_filter(itp(xx), window_size, poly_order)
+                np.savetxt(os.path.join(
+                    results_dir, 'LA_strainRate_longitud_2Ch.txt'), LA_strainRate_longitud_2ch)
+                np.savetxt(os.path.join(
+                    results_dir, 'LA_strainRate_longitud_2Ch_smooth.txt'), LA_strainRate_longitud_2ch_smooth)
             except:
-                logger.error('Problem calculating 2ch strain')
+                logger.error('Problem calculating 2ch strain and strain rate')
+                LA_strain_circum_2Ch = -1*np.ones(N_frames_2Ch)
+                LA_strain_longitud_2ch = -1*np.ones(N_frames_2Ch)
+                LA_strainRate_circum_2Ch = -1*np.ones(N_frames_2Ch)
+                LA_strainRate_longitud_2ch = -1*np.ones(N_frames_2Ch)
                 QC_atria_2Ch = 1
     else:
-        QC_atria_2Ch = 1
+        logger.info('No 2ch image - skipping.')
+        return [None, None]
 
     # Save 2ch dict and atrial points to avoid recomupting
     if save_2ch_dict_flag and QC_atria_2Ch == 0:
@@ -1135,9 +1185,9 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
     # =====================================================================
     # Compute 2ch volume
     # =====================================================================
-    LA_volume_area_2ch = -1*np.ones(N_frames_2Ch)
-    LA_volume_SR_2ch = -1*np.ones(N_frames_2Ch)
     if QC_atria_2Ch == 0:
+        LA_volume_area_2ch = -1*np.ones(N_frames_2Ch)
+        LA_volume_SR_2ch = -1*np.ones(N_frames_2Ch)
         for fr in range(N_frames_2Ch):
             # Simpson's rule
             d1d2 = la_diams_2Ch[fr, :] * la_diams_2Ch[fr, :]
@@ -1176,6 +1226,8 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
     # la_4Ch - calculate area and points
     # =========================================================================
     filename_la_seg_4Ch = os.path.join(subject_dir, 'la_4Ch_seg_nnUnet.nii.gz')
+    save_4ch_LA_dict_flag = False  # Whether to save 4ch dict and points
+    save_4ch_RA_dict_flag = False
     if os.path.exists(filename_la_seg_4Ch):
         nim = nib.load(filename_la_seg_4Ch)
         la_seg_4Ch = nim.get_fdata()
@@ -1185,6 +1237,7 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
             la_seg_4Ch = la_seg_4Ch[:, :, 0, :]
         la_seg_4Ch = np.transpose(la_seg_4Ch, [1, 0, 2])
         _, _, N_frames_4Ch = la_seg_4Ch.shape
+        tt_4ch_orig = calculate_tt(filename_la_seg_4Ch)
 
         # Get largest connected components
         for fr in range(N_frames_4Ch):
@@ -1201,14 +1254,12 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
                 float)) * area_per_voxel  # in mm2
 
         # Compute 4ch params needed for simpson's rule
-        save_4ch_LA_dict_flag = False  # Whether to save 4ch dict and points
-        save_4ch_RA_dict_flag = False
         dict_4ch_LA_file = os.path.join(  # dict of length values - LA
             results_dir, f'{study_ID}_4ch_LA_length_dict.npy')
         dict_4ch_RA_file = os.path.join(  # dict of length values - RA
             results_dir, f'{study_ID}_4ch_RA_length_dict.npy')
         points_LV_4ch_file = os.path.join(results_dir, 'points_LV_4Ch.npy') 
-        if os.path.exists(dict_4ch_LA_file):
+        if os.path.exists(dict_4ch_LA_file) and not recalculate_points:
             # If already saved, load the dictionary
             logger.info('Loading pre-saved dictionary of 4ch LA params')
             dict_4ch_LA = np.load(dict_4ch_LA_file, allow_pickle=True).item()
@@ -1271,10 +1322,10 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
                     except Exception:
                         logger.error('Problem in disk-making with subject {} in la_4Ch fr {}'.
                                      format(study_ID, fr))
-                        QC_atria_4Ch_LA = 1
+                        return [None, None]
             logger.info('Finished calculating 4ch LA points\n')
 
-        if os.path.exists(dict_4ch_RA_file):
+        if os.path.exists(dict_4ch_RA_file) and not recalculate_points:
             logger.info('Loading pre-saved dictionary of 4ch RA params')
             dict_4ch_RA = np.load(dict_4ch_RA_file, allow_pickle=True).item()
             la_diams_RV = dict_4ch_RA['la_diams_RV']
@@ -1363,66 +1414,106 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
         # =====================================================================
         # 4ch Strain
         # =====================================================================
-        LA_strain_circum_4Ch_smooth = -1*np.ones(N_frames_4Ch)
-        LA_strain_longitud_4Ch_smooth = -1*np.ones(N_frames_4Ch)
         if QC_atria_4Ch_LA == 0:
+            LA_strain_circum_4Ch_smooth = -1*np.ones(N_frames_4Ch)
+            LA_strain_longitud_4Ch_smooth = -1*np.ones(N_frames_4Ch)
+            LA_strainRate_circum_4Ch_smooth = -1*np.ones(N_frames_4Ch)
+            LA_strainRate_longitud_4Ch_smooth = -1*np.ones(N_frames_4Ch)
             try:
+                # Strain
                 LA_strain_circum_4Ch = get_strain(LA_circumf_cycle_4Ch)
-                LA_strain_longitud_4Ch = get_strain(length_top_4Ch)
-                
-                x = np.linspace(0, N_frames_4Ch - 1, N_frames_4Ch)
-                xx = np.linspace(np.min(x), np.max(x), N_frames_4Ch)
-                itp = interp1d(x, LA_strain_circum_4Ch)
-                yy_sg = savgol_filter(itp(xx), window_size, poly_order)
-                LA_strain_circum_4Ch_smooth = yy_sg
-                itp = interp1d(x, LA_strain_longitud_4Ch)
-                yy_sg = savgol_filter(itp(xx), window_size, poly_order)
-                LA_strain_longitud_4Ch_smooth = yy_sg
-
+                x = np.linspace(0, N_frames_4Ch*p - 1, N_frames_4Ch*p)
+                xx = np.linspace(np.min(x), np.max(x), N_frames_4Ch*p)
+                # itp = interp1d(x, LA_strain_circum_4Ch)
+                # yy_sg = savgol_filter(itp(xx), window_size, poly_order)
+                # LA_strain_circum_4Ch_smooth = yy_sg
+                LA_strain_circum_4Ch_smooth, tt_4ch = smooth_curve_1d(LA_strain_circum_4Ch, N_frames_4Ch, s, N_frames_4Ch*p, tt_4ch_orig)
                 np.savetxt(os.path.join(
-                    results_dir, 'LA_strain_smooth_4Ch.txt'),
+                    results_dir, 'LA_strain_circum_4Ch_smooth.txt'),
                     LA_strain_circum_4Ch_smooth)
-                
+
+                LA_strain_longitud_4Ch = get_strain(length_top_4Ch)
+                LA_strain_longitud_4Ch_smooth, tt_4ch = smooth_curve_1d(LA_strain_longitud_4Ch, N_frames_4Ch, s, N_frames_4Ch*p, tt_4ch_orig)
+                # itp = interp1d(x, LA_strain_longitud_4Ch)
+                # yy_sg = savgol_filter(itp(xx), window_size, poly_order)
+                # LA_strain_longitud_4Ch_smooth = yy_sg
                 np.savetxt(os.path.join(
                     results_dir, 'LA_strain_longitud_4Ch_smooth.txt'),
                     LA_strain_longitud_4Ch_smooth)
+                
+                # Strain rate
+                LA_strainRate_circum_4Ch = np.gradient(LA_strain_circum_4Ch_smooth, tt_4ch)
+                itp = interp1d(x, LA_strainRate_circum_4Ch)
+                LA_strainRate_circum_4Ch_smooth = savgol_filter(itp(xx), window_size, poly_order)
+                np.savetxt(os.path.join(
+                    results_dir, 'LA_strainRate_circum_4Ch_smooth.txt'),
+                    LA_strainRate_circum_4Ch_smooth)
+                
+                LA_strainRate_longitud_4Ch = np.gradient(LA_strain_longitud_4Ch_smooth, tt_4ch)
+                itp = interp1d(x, LA_strainRate_longitud_4Ch)
+                LA_strainRate_longitud_4Ch_smooth = savgol_filter(itp(xx), window_size, poly_order)
+                np.savetxt(os.path.join(
+                    results_dir, 'LA_strainRate_longitud_4Ch_smooth.txt'),
+                    LA_strainRate_longitud_4Ch_smooth)
             except:
                 QC_atria_4Ch_LA = 1
                 logger.error('Error interpolating LA strains')
 
-        RA_strain_circum_4Ch_smooth = -1*np.ones(N_frames_4Ch)
-        RA_strain_longitud_4Ch_smooth = -1*np.ones(N_frames_4Ch)
+        RA_strain_circum_4Ch_smooth = -1*np.ones(50)
+        RA_strain_longitud_4Ch_smooth = -1*np.ones(50)
+        RA_strainRate_circum_4Ch_smooth = -1*np.ones(50)
+        RA_strainRate_longitud_4Ch_smooth = -1*np.ones(50)
         if QC_atria_4Ch_RA == 0:
             try:
+                # Strain
                 RA_strain_circum_4Ch = get_strain(RA_circumf_cycle_4Ch)
-                RA_strain_longitud_4Ch = get_strain(length_top_RV)
-
-                x = np.linspace(0, N_frames_4Ch - 1, N_frames_4Ch)
-                xx = np.linspace(np.min(x), np.max(x), N_frames_4Ch)
-                itp = interp1d(x, RA_strain_circum_4Ch)
-                yy_sg = savgol_filter(itp(xx), window_size, poly_order)
-                RA_strain_circum_4Ch_smooth = yy_sg
-                itp = interp1d(x, RA_strain_longitud_4Ch)
-                yy_sg = savgol_filter(itp(xx), window_size, poly_order)
-                RA_strain_longitud_4Ch_smooth = yy_sg
-
+                RA_strain_circum_4Ch_smooth, tt_4ch = smooth_curve_1d(RA_strain_circum_4Ch, N_frames_4Ch, s, N_frames_4Ch*p, tt_4ch_orig)
+                x = np.linspace(0, N_frames_4Ch*p - 1, N_frames_4Ch*p)
+                xx = np.linspace(np.min(x), np.max(x), N_frames_4Ch*p)
+                # itp = interp1d(x, RA_strain_circum_4Ch)
+                # yy_sg = savgol_filter(itp(xx), window_size, poly_order)
+                # RA_strain_circum_4Ch_smooth = yy_sg
                 np.savetxt(os.path.join(
-                    results_dir, 'RA_strain_smooth_4Ch.txt'),
+                    results_dir, 'RA_strain_circum_4Ch_smooth.txt'),
                     RA_strain_circum_4Ch_smooth)
+
+                RA_strain_longitud_4Ch = get_strain(length_top_RV)
+                RA_strain_longitud_4Ch_smooth, tt_4ch = smooth_curve_1d(RA_strain_longitud_4Ch, N_frames_4Ch, s, N_frames_4Ch*p, tt_4ch_orig)
+                # itp = interp1d(x, RA_strain_longitud_4Ch)
+                # yy_sg = savgol_filter(itp(xx), window_size, poly_order)
+                # RA_strain_longitud_4Ch_smooth = yy_sg
                 np.savetxt(os.path.join(
                     results_dir, 'RA_strain_longitud_4Ch_smooth.txt'),
                     RA_strain_longitud_4Ch_smooth)
+
+                # Strain rate
+                RA_strainRate_circum_4Ch = np.gradient(RA_strain_circum_4Ch_smooth, tt_4ch)
+                itp = interp1d(x, RA_strainRate_circum_4Ch)
+                RA_strainRate_circum_4Ch_smooth = savgol_filter(itp(xx), window_size, poly_order)
+                np.savetxt(os.path.join(
+                    results_dir, 'RA_strainRate_circum_4Ch_smooth.txt'),
+                    RA_strainRate_circum_4Ch_smooth)
+                
+                RA_strainRate_longitud_4Ch = np.gradient(RA_strain_longitud_4Ch_smooth, tt_4ch)
+                itp = interp1d(x, RA_strainRate_longitud_4Ch)
+                RA_strainRate_longitud_4Ch_smooth = savgol_filter(itp(xx), window_size, poly_order)
+                np.savetxt(os.path.join(
+                    results_dir, 'RA_strainRate_longitud_4Ch_smooth.txt'),
+                    RA_strainRate_longitud_4Ch_smooth)
             except:
                 QC_atria_4Ch_RA = 1
                 logger.error('Error interpolating RA strains')
-
+    else:
+        logger.info('No 4ch image - skipping.')
+        return [None, None]
+    
     # =====================================================================
     # Compute 4ch volume
     # =====================================================================
     # LA volumes
-    LA_volume_SR_4Ch = -1*np.ones(N_frames_4Ch)
-    LA_volume_area_4ch = -1*np.ones(N_frames_4Ch)
     if QC_atria_4Ch_LA == 0:
+        LA_volume_SR_4Ch = -1*np.ones(N_frames_4Ch)
+        LA_volume_area_4ch = -1*np.ones(N_frames_4Ch)
         for fr in range(N_frames_4Ch):
             # Simpson's rule
             d1d2 = la_diams_4Ch[fr, :] * la_diams_4Ch[fr, :]
@@ -1458,9 +1549,9 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
         LA_volume_SR_4Ch_smooth = -1*np.ones(N_frames_4Ch)
 
     # RA volumes 
-    RA_volumes_SR = -1*np.ones(N_frames_4Ch)
-    RA_volumes_area = -1*np.ones(N_frames_4Ch) 
     if QC_atria_4Ch_RA == 0:
+        RA_volumes_SR = -1*np.ones(N_frames_4Ch)
+        RA_volumes_area = -1*np.ones(N_frames_4Ch) 
         for fr in range(N_frames_4Ch):
             d1d2 = la_diams_RV[fr, :] * la_diams_RV[fr, :]
             length = length_top_RV[fr]
@@ -1493,9 +1584,9 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
     # =====================================================================
     # Compute volume by combining 2ch and 4ch views
     # =====================================================================
-    LA_volume_combined_SR = -1*np.ones(N_frames_4Ch)
-    LA_volume_combined_area = -1*np.ones(N_frames_4Ch)
     if QC_atria_4Ch_LA == 0 and QC_atria_2Ch == 0 and N_frames_2Ch == N_frames_4Ch:
+        LA_volume_combined_SR = -1*np.ones(N_frames_4Ch)
+        LA_volume_combined_area = -1*np.ones(N_frames_4Ch)
         for fr in range(N_frames_4Ch):
             # Combined volume based on Simpson's rule
             d1d2 = la_diams_2Ch[fr, :] * la_diams_4Ch[fr, :]
@@ -1521,9 +1612,16 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
         # Calculate combined strain using 2ch and 4ch views
         # =====================================================================
         LA_strain_circum_combined = LA_strain_circum_4Ch_smooth +\
-            LA_strain_circum_2Ch / 2
+            LA_strain_circum_2Ch_smooth / 2
         LA_strain_longitud_combined = LA_strain_longitud_4Ch_smooth +\
-            LA_strain_longitud_2ch / 2
+            LA_strain_longitud_2ch_smooth / 2
+        LA_strain_circum_combined = smooth_curve_1d(LA_strain_circum_combined, N_frames_4Ch*p, s)
+        LA_strain_longitud_combined = smooth_curve_1d(LA_strain_longitud_combined, N_frames_4Ch*p, s)
+        
+        LA_strainRate_circum_combined = LA_strainRate_circum_4Ch_smooth +\
+            LA_strainRate_circum_2Ch_smooth / 2
+        LA_strainRate_longitud_combined = LA_strainRate_longitud_4Ch_smooth +\
+            LA_strainRate_longitud_2ch_smooth / 2
 
         np.savetxt(os.path.join(results_dir, 'LA_volume_combined_SR.txt'),
                    LA_volume_combined_SR)
@@ -1539,12 +1637,18 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
                    LA_strain_circum_combined)
         np.savetxt(os.path.join(results_dir, 'LA_strain_longitud_combined.txt'),
                    LA_strain_longitud_combined)
+        np.savetxt(os.path.join(results_dir, 'LA_strainRate_circum_combined.txt'),
+                   LA_strainRate_circum_combined)
+        np.savetxt(os.path.join(results_dir, 'LA_strainRate_longitud_combined.txt'),
+                   LA_strainRate_longitud_combined)
 
     # =========================================================================
     # Compute params if not the same number of slices between views
     # =========================================================================
     elif QC_atria_4Ch_LA == 0 and QC_atria_2Ch == 0 and N_frames_2Ch != N_frames_4Ch:
         max_frames = max(N_frames_2Ch, N_frames_4Ch)
+        LA_volume_combined_SR = -1*np.ones(N_frames_4Ch)
+        LA_volume_combined_area = -1*np.ones(N_frames_4Ch)
         length_top_2Ch_itp = resample(length_top_2Ch, max_frames)
         length_top_4Ch_itp = resample(length_top_4Ch, max_frames)
         area_LA_2Ch_itp = resample(area_LA_2Ch, max_frames)
@@ -1575,6 +1679,8 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
         LA_volume_combined_area_smooth = yy_sg
         LA_strain_circum_combined = -1*np.ones(20)
         LA_strain_longitud_combined = -1*np.ones(20)
+        LA_strainRate_circum_combined = -1*np.ones(20)
+        LA_strainRate_longitud_combined = -1*np.ones(20)
 
         np.savetxt(os.path.join(results_dir, 'LA_volume_combined_SR.txt'),
                    LA_volume_combined_SR)
@@ -1586,16 +1692,13 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
         np.savetxt(os.path.join(results_dir,
                                 'LA_volume_combined_area_smooth.txt'),
                    LA_volume_combined_area_smooth)
-        np.savetxt(os.path.join(results_dir, 'LA_strain_smooth.txt'),
-                   LA_strain_circum_combined)
-        np.savetxt(os.path.join(results_dir,
-                                'LA_strain_longitud_combined.txt'),
-                   LA_strain_longitud_combined)
     else:
         LA_volume_combined_SR_smooth = -1*np.ones(N_frames_4Ch)
         LA_volume_combined_area_smooth = -1*np.ones(N_frames_4Ch)
         LA_strain_circum_combined = -1*np.ones(N_frames_4Ch)
         LA_strain_longitud_combined = -1*np.ones(N_frames_4Ch)
+        LA_strainRate_circum_combined = -1*np.ones(N_frames_4Ch)
+        LA_strainRate_longitud_combined = -1*np.ones(N_frames_4Ch)
 
     # =========================================================================
     # Peak volume
@@ -1612,8 +1715,8 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
     # =========================================================================
     # Peak strain
     # =========================================================================
-    peak_LA_strain_circum_2ch_max = LA_strain_circum_2Ch.max()
-    peak_LA_strain_longitud_2ch_max = LA_strain_longitud_2ch.max()
+    peak_LA_strain_circum_2ch_max = LA_strain_circum_2Ch_smooth.max()
+    peak_LA_strain_longitud_2ch_max = LA_strain_longitud_2ch_smooth.max()
     peak_LA_strain_circum_4ch_max = LA_strain_circum_4Ch_smooth.max()
     peak_LA_strain_longitud_4ch_max = LA_strain_longitud_4Ch_smooth.max()
     peak_LA_strain_circum_combined_max = LA_strain_circum_combined.max()
@@ -1621,42 +1724,57 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
     peak_RA_strain_circum_max = RA_strain_circum_4Ch_smooth.max()
     peak_RA_strain_longitud_max = RA_strain_longitud_4Ch_smooth.max()
 
-    ES_frame = LA_volume_combined_SR_smooth.argmax()
-    peak_LA_strain_circum_2ch_ES = LA_strain_circum_2Ch[ES_frame]
-    peak_LA_strain_longitud_2ch_ES = LA_strain_longitud_2ch[ES_frame]
+    ES_frame = LA_volume_combined_SR_smooth.argmax() * p
+    peak_LA_strain_circum_2ch_ES = LA_strain_circum_2Ch_smooth[ES_frame]
+    peak_LA_strain_longitud_2ch_ES = LA_strain_longitud_2ch_smooth[ES_frame]
     peak_LA_strain_circum_4ch_ES = LA_strain_circum_4Ch_smooth[ES_frame]
     peak_LA_strain_longitud_4ch_ES = LA_strain_longitud_4Ch_smooth[ES_frame]
     peak_LA_strain_circum_combined_ES = LA_strain_circum_combined[ES_frame]
     peak_LA_strain_longitud_combined_ES = LA_strain_longitud_combined[ES_frame]
 
-    ES_frame_RA = RA_volumes_SR_smooth.argmax()
+    ES_frame_RA = RA_volumes_SR_smooth.argmax() * p
     peak_RA_strain_circum_ES = RA_strain_circum_4Ch_smooth[ES_frame_RA]
     peak_RA_strain_longitud_ES = RA_strain_longitud_4Ch_smooth[ES_frame_RA]
+
+    first10_2ch = int(len(LA_strainRate_circum_2Ch_smooth)*0.1)
+    first10_4ch = int(len(LA_strainRate_circum_4Ch_smooth)*0.1)
+    peak_LA_strainRate_circum_2ch = LA_strainRate_circum_2Ch_smooth[first10_2ch:].max()
+    peak_LA_strainRate_longit_2ch = LA_strainRate_longitud_2ch_smooth[first10_2ch:].max()
+    peak_LA_strainRate_circum_4ch = LA_strainRate_circum_4Ch_smooth[first10_4ch:].max()
+    peak_LA_strainRate_longitud_4ch = LA_strainRate_longitud_4Ch_smooth[first10_4ch:].max()
+    peak_LA_strainRate_circum_combo = LA_strainRate_circum_combined[first10_4ch:].max()
+    peak_LA_strainRate_longitud_combo = LA_strainRate_longitud_combined[first10_4ch:].max()
+    peak_RA_strainRate_circum = RA_strainRate_circum_4Ch_smooth[first10_4ch:].max()
+    peak_RA_strainRate_longitud = RA_strainRate_longitud_4Ch_smooth[first10_4ch:].max()
 
     # =========================================================================
     # PLOTS
     # =========================================================================
     plt.figure()
-    plt.plot(LA_volume_SR_2ch_smooth, label='Simpson - 2Ch')
-    plt.plot(LA_volume_SR_4Ch_smooth, label='Simpson - 4Ch')
-    plt.plot(LA_volume_area_2ch_smooth, label='Area - 2Ch')
-    plt.plot(LA_volume_area_4ch_smooth, label='Area - 4Ch')
-    plt.plot(LA_volume_combined_SR_smooth, label='Simpson - combined')
-    plt.plot(LA_volume_combined_area_smooth, label='Area method - combined')
+    plt.plot(tt_2ch_orig, LA_volume_SR_2ch_smooth, label='Simpson - 2Ch')
+    plt.plot(tt_4ch_orig, LA_volume_SR_4Ch_smooth, label='Simpson - 4Ch')
+    plt.plot(tt_2ch_orig, LA_volume_area_2ch_smooth, label='Area - 2Ch')
+    plt.plot(tt_4ch_orig, LA_volume_area_4ch_smooth, label='Area - 4Ch')
+    plt.plot(tt_4ch_orig, LA_volume_combined_SR_smooth, label='Simpson - combined')
+    plt.plot(tt_4ch_orig, LA_volume_combined_area_smooth, label='Area method - combined')
     plt.legend()
+    plt.xlabel('Trigger Time (ms)')
+    plt.ylabel('Volume (mL/m2)')
     plt.title('Left Atrial Volume')
     plt.savefig(os.path.join(results_dir, 'LA_volume.png'))
     plt.close('all')
 
     plt.figure()
-    plt.plot(RA_volumes_SR_smooth, label='Simpson method')
-    plt.plot(RA_volumes_area_smooth, label='Area method')
+    plt.plot(tt_4ch_orig, RA_volumes_SR_smooth, label='Simpson method')
+    plt.plot(tt_4ch_orig, RA_volumes_area_smooth, label='Area method')
     plt.legend()
+    plt.xlabel('Trigger Time (ms)')
+    plt.ylabel('Volume (mL/m2)')
     plt.title('Right Atrial Volume')
     plt.savefig(os.path.join(results_dir, 'RA_volume.png'))
     plt.close('all')
 
-    # interpolation
+    # Interpolation
     if debug:
         interp_folder = '/media/ec17/WINDOWS_DATA/Flow_project/Atrial_strain/log/interp'
         if not os.path.exists(interp_folder):
@@ -1741,70 +1859,118 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
                     f'RA_vol_Area_{study_ID}.png'))
         plt.close('all')
 
-    # try:
     # Circumferential strain
     plt.figure()
-    plt.plot(LA_strain_circum_2Ch, label='2ch')
-    plt.plot(LA_strain_circum_2Ch.argmax(),
+    plt.plot(tt_2ch, LA_strain_circum_2Ch_smooth, label='2ch')
+    plt.plot(tt_2ch[LA_strain_circum_2Ch_smooth.argmax()],
                 peak_LA_strain_circum_2ch_max, 'ro', label='Peak strain - max')
     plt.plot(
-        ES_frame, peak_LA_strain_circum_2ch_ES, 'b*', label='Peak strain - ES')
-    plt.plot(LA_strain_circum_4Ch_smooth, 'k', label='4ch')
-    plt.plot(LA_strain_circum_4Ch_smooth.argmax(),
+        tt_2ch[ES_frame], peak_LA_strain_circum_2ch_ES, 'b*', label='Peak strain - ES')
+    plt.plot(tt_4ch, LA_strain_circum_4Ch_smooth, 'k', label='4ch')
+    plt.plot(tt_4ch[LA_strain_circum_4Ch_smooth.argmax()],
                 peak_LA_strain_circum_4ch_max, 'ro')
-    plt.plot(ES_frame, peak_LA_strain_circum_4ch_ES, 'b*')
-    plt.plot(LA_strain_circum_combined, label='Combined')
-    plt.plot(LA_strain_circum_combined.argmax(),
+    plt.plot(tt_4ch[ES_frame], peak_LA_strain_circum_4ch_ES, 'b*')
+    plt.plot(tt_4ch, LA_strain_circum_combined, label='Combined')
+    plt.plot(tt_4ch[LA_strain_circum_combined.argmax()],
                 peak_LA_strain_circum_combined_max, 'ro')
-    plt.plot(ES_frame, peak_LA_strain_circum_combined_ES, 'b*')
+    plt.plot(tt_4ch[ES_frame], peak_LA_strain_circum_combined_ES, 'b*')
+    plt.xlabel('Trigger Time (ms)')
+    plt.ylabel('Strain')
     plt.legend()
     plt.title('LA Circumferential Strain')
     plt.savefig(os.path.join(results_dir, 'LA_circum_strain.png'))
     plt.close('all')
 
+    # Circumferential strain rate
+    plt.figure()
+    plt.plot(tt_2ch, LA_strainRate_circum_2Ch_smooth, label='2ch')
+    plt.plot(tt_4ch, LA_strainRate_circum_4Ch_smooth, label='4ch')
+    plt.plot(tt_4ch, LA_strainRate_circum_combined, label='combined')
+    plt.plot(tt_2ch[LA_strainRate_circum_2Ch_smooth[first10_2ch:].argmax() + first10_2ch], peak_LA_strainRate_circum_2ch, 'ro')
+    plt.plot(tt_4ch[LA_strainRate_circum_4Ch_smooth[first10_4ch:].argmax() + first10_4ch], peak_LA_strainRate_circum_4ch, 'bo')
+    plt.plot(tt_4ch[LA_strainRate_circum_combined[first10_4ch:].argmax() + first10_4ch], peak_LA_strainRate_circum_combo, 'ko')
+    plt.legend()
+    plt.xlabel('Trigger Time (ms)')
+    plt.ylabel('Strain Rate')
+    plt.title('LA Circumferntial Strain Rate')
+    plt.savefig(os.path.join(results_dir, 'LA_circum_strainRate.png'))
+    plt.close('all')
+
     # Longitudinal strain
     plt.figure()
-    plt.plot(LA_strain_longitud_2ch, label='2ch')
-    plt.plot(LA_strain_longitud_2ch.argmax(),
+    plt.plot(tt_2ch, LA_strain_longitud_2ch_smooth, label='2ch')
+    plt.plot(tt_2ch[LA_strain_longitud_2ch_smooth.argmax()],
                 peak_LA_strain_longitud_2ch_max, 'ro',
                 label='Peak strain - max')
-    plt.plot(ES_frame, peak_LA_strain_longitud_2ch_ES,
+    plt.plot(tt_2ch[ES_frame], peak_LA_strain_longitud_2ch_ES,
                 'b*', label='Peak strain - ES')
-    plt.plot(LA_strain_longitud_4Ch_smooth, label='4ch')
-    plt.plot(LA_strain_longitud_4Ch_smooth.argmax(),
+    plt.plot(tt_4ch, LA_strain_longitud_4Ch_smooth, label='4ch')
+    plt.plot(tt_4ch[LA_strain_longitud_4Ch_smooth.argmax()],
                 peak_LA_strain_longitud_4ch_max, 'ro')
-    plt.plot(ES_frame, peak_LA_strain_longitud_4ch_ES, 'b*')
-    plt.plot(LA_strain_longitud_combined, label='Combined')
-    plt.plot(LA_strain_longitud_combined.argmax(),
+    plt.plot(tt_4ch[ES_frame], peak_LA_strain_longitud_4ch_ES, 'b*')
+    plt.plot(tt_4ch, LA_strain_longitud_combined, label='Combined')
+    plt.plot(tt_4ch[LA_strain_longitud_combined.argmax()],
                 peak_LA_strain_longitud_combined_max, 'ro')
-    plt.plot(ES_frame, peak_LA_strain_longitud_combined_ES, 'b*')
+    plt.plot(tt_4ch[ES_frame], peak_LA_strain_longitud_combined_ES, 'b*')
     plt.legend()
+    plt.xlabel('Trigger Time (ms)')
+    plt.ylabel('Strain')
     plt.title('LA Longitudinal Strain')
     plt.savefig(os.path.join(results_dir, 'LA_longitud_strain.png'))
     plt.close('all')
 
+    # Longitudinal strain rate
+    plt.figure()
+    plt.plot(tt_2ch, LA_strainRate_longitud_2ch_smooth, label='2ch')
+    plt.plot(tt_4ch, LA_strainRate_longitud_4Ch_smooth, label='4ch')
+    plt.plot(tt_4ch, LA_strainRate_longitud_combined, label='combined')
+    plt.plot(tt_2ch[LA_strainRate_longitud_2ch_smooth[first10_2ch:].argmax() + first10_2ch], peak_LA_strainRate_longit_2ch, 'ro')
+    plt.plot(tt_4ch[LA_strainRate_longitud_4Ch_smooth[first10_4ch:].argmax() + first10_4ch], peak_LA_strainRate_longitud_4ch, 'bo')
+    plt.plot(tt_4ch[LA_strainRate_longitud_combined[first10_4ch:].argmax() + first10_4ch], peak_LA_strainRate_longitud_combo, 'ko')
+    plt.legend()
+    plt.xlabel('Trigger Time (ms)')
+    plt.ylabel('Strain Rate')
+    plt.title('LA Longitudinal Strain Rate')
+    plt.savefig(os.path.join(results_dir, 'LA_longit_strainRate.png'))
+    plt.close('all')
+
     # RA strain
     plt.figure()
-    plt.plot(RA_strain_circum_4Ch_smooth, label='Circum')
-    plt.plot(RA_strain_circum_4Ch_smooth.argmax(),
+    plt.plot(tt_4ch, RA_strain_circum_4Ch_smooth, label='Circum')
+    plt.plot(tt_4ch[RA_strain_circum_4Ch_smooth.argmax()],
                 peak_RA_strain_circum_max, 'ro', label='Peak strain - max')
-    plt.plot(ES_frame_RA, peak_RA_strain_circum_ES, 'b*',
+    plt.plot(tt_4ch[ES_frame_RA], peak_RA_strain_circum_ES, 'b*',
                 label='Peak strain - ES')
-    plt.plot(RA_strain_longitud_4Ch_smooth, label='Longitud')
-    plt.plot(RA_strain_longitud_4Ch_smooth.argmax(),
+    plt.plot(tt_4ch, RA_strain_longitud_4Ch_smooth, label='Longitud')
+    plt.plot(tt_4ch[RA_strain_longitud_4Ch_smooth.argmax()],
                 peak_RA_strain_longitud_max, 'ro')
-    plt.plot(ES_frame_RA, peak_RA_strain_longitud_ES, 'b*')
+    plt.plot(tt_4ch[ES_frame_RA], peak_RA_strain_longitud_ES, 'b*')
     plt.legend()
+    plt.xlabel('Trigger Time (ms)')
+    plt.ylabel('Strain')
     plt.title('RA Strain')
     plt.savefig(os.path.join(results_dir, 'RA_strain.png'))
     plt.close('all')
 
-    # interpolate
+    # RA Strain Rate
+    plt.figure()
+    plt.plot(tt_4ch, RA_strainRate_circum_4Ch_smooth, label='circum')
+    plt.plot(tt_4ch, RA_strainRate_longitud_4Ch_smooth, label='longitud')
+    plt.plot(tt_4ch[RA_strainRate_circum_4Ch_smooth[first10_4ch:].argmax() + first10_4ch], peak_RA_strainRate_circum, 'bo')
+    plt.plot(tt_4ch[RA_strainRate_longitud_4Ch_smooth[first10_4ch:].argmax() + first10_4ch], peak_RA_strainRate_longitud, 'ko')
+    plt.legend()
+    plt.xlabel('Trigger Time (ms)')
+    plt.ylabel('Strain Rate')
+    plt.title('RA Strain Rate')
+    plt.savefig(os.path.join(results_dir, 'RA_strainRate.png'))
+    plt.close('all')
+
+    # Interpolate
     if debug:
         plt.figure()
-        plt.plot(LA_strain_circum_2Ch, label='Original')
-        plt.scatter(x_2ch, LA_strain_circum_2Ch)
-        plt.plot(LA_strain_circum_2Ch_smooth, 'r', label='Smoothed')
+        plt.plot(tt_2ch_orig, LA_strain_circum_2Ch, label='Original')
+        plt.scatter(tt_2ch_orig, LA_strain_circum_2Ch)
+        plt.plot(tt_2ch, LA_strain_circum_2Ch_smooth, 'r', label='Smoothed')
         plt.legend()
         plt.title('LA strain circum 2ch')
         plt.savefig(os.path.join(interp_folder,
@@ -1812,9 +1978,9 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
         plt.close('all')
 
         plt.figure()
-        plt.plot(LA_strain_circum_4Ch, label='Original')
-        plt.scatter(x_4ch, LA_strain_circum_4Ch)
-        plt.plot(LA_strain_circum_4Ch_smooth, 'r', label='Smoothed')
+        plt.plot(tt_4ch_orig, LA_strain_circum_4Ch, label='Original')
+        plt.scatter(tt_4ch_orig, LA_strain_circum_4Ch)
+        plt.plot(tt_4ch, LA_strain_circum_4Ch_smooth, 'r', label='Smoothed')
         plt.legend()
         plt.title('LA strain circum 4ch')
         plt.savefig(os.path.join(interp_folder,
@@ -1822,9 +1988,9 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
         plt.close('all')
 
         plt.figure()
-        plt.plot(LA_strain_longitud_2ch, label='Original')
-        plt.scatter(x_2ch, LA_strain_longitud_2ch)
-        plt.plot(LA_strain_longitud_2ch_smooth, 'r', label='Smoothed')
+        plt.plot(tt_2ch_orig, LA_strain_longitud_2ch, label='Original')
+        plt.scatter(tt_2ch_orig, LA_strain_longitud_2ch)
+        plt.plot(tt_2ch, LA_strain_longitud_2ch_smooth, 'r', label='Smoothed')
         plt.legend()
         plt.title('LA strain longitud 2ch')
         plt.savefig(os.path.join(interp_folder,
@@ -1832,9 +1998,9 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
         plt.close('all')
 
         plt.figure()
-        plt.plot(LA_strain_longitud_4Ch, label='Original')
-        plt.scatter(x_4ch, LA_strain_longitud_4Ch_smooth)
-        plt.plot(LA_strain_longitud_4Ch_smooth, 'r', label='Smoothed')
+        plt.plot(tt_4ch_orig, LA_strain_longitud_4Ch, label='Original')
+        plt.scatter(tt_4ch_orig, LA_strain_longitud_4Ch)
+        plt.plot(tt_4ch, LA_strain_longitud_4Ch_smooth, 'r', label='Smoothed')
         plt.legend()
         plt.title('LA strain longitud 4ch')
         plt.savefig(os.path.join(interp_folder,
@@ -1842,9 +2008,9 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
         plt.close('all')
 
         plt.figure()
-        plt.plot(RA_strain_circum_4Ch, label='Original')
-        plt.scatter(x_2ch, RA_strain_circum_4Ch)
-        plt.plot(RA_strain_circum_4Ch_smooth, 'r', label='Smoothed')
+        plt.plot(tt_4ch_orig, RA_strain_circum_4Ch, label='Original')
+        plt.scatter(tt_4ch_orig, RA_strain_circum_4Ch)
+        plt.plot(tt_4ch, RA_strain_circum_4Ch_smooth, 'r', label='Smoothed')
         plt.legend()
         plt.title('RA strain circum')
         plt.savefig(os.path.join(interp_folder,
@@ -1852,44 +2018,40 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
         plt.close('all')
 
         plt.figure()
-        plt.plot(RA_strain_longitud_4Ch, label='Original')
-        plt.scatter(x_4ch, RA_strain_longitud_4Ch)
-        plt.plot(RA_strain_longitud_4Ch_smooth, 'r', label='Smoothed')
+        plt.plot(tt_4ch_orig, RA_strain_longitud_4Ch, label='Original')
+        plt.scatter(tt_4ch_orig, RA_strain_longitud_4Ch)
+        plt.plot(tt_4ch, RA_strain_longitud_4Ch_smooth, 'r', label='Smoothed')
         plt.legend()
         plt.title('RA strain longitud')
         plt.savefig(os.path.join(interp_folder,
                     f'RA_strain_longitud_{study_ID}.png'))
         plt.close('all')
-    # except Exception:
-    #     logger.error(
-    #         'Problem in calculating strain with subject {}'.format(study_ID))
-    #     QC_atria_4Ch_LA = 1
 
     # =========================================================================
     # SAVE RESULTS
     # =========================================================================
-    vols = -1*np.ones(25, dtype=object)
+    vols = -1*np.ones(33, dtype=object)
     vols[0] = study_ID
-    vols[1] = peak_LA_volume_area_2ch
-    vols[2] = peak_LA_volume_SR_2ch
-    vols[3] = peak_LA_volume_area_4ch
-    vols[4] = peak_LA_volume_SR_4ch
-    vols[5] = peak_LA_volume_area_combined
-    vols[6] = peak_LA_volume_SR_combined
+    vols[1] = peak_LA_volume_area_combined
+    vols[2] = peak_LA_volume_SR_combined
+    vols[3] = peak_LA_volume_area_2ch
+    vols[4] = peak_LA_volume_SR_2ch
+    vols[5] = peak_LA_volume_area_4ch
+    vols[6] = peak_LA_volume_SR_4ch
 
-    vols[7] = peak_LA_strain_circum_2ch_ES
-    vols[8] = peak_LA_strain_circum_2ch_max
-    vols[9] = peak_LA_strain_circum_4ch_ES
-    vols[10] = peak_LA_strain_circum_4ch_max
-    vols[11] = peak_LA_strain_circum_combined_ES
-    vols[12] = peak_LA_strain_circum_combined_max
+    vols[7] = peak_LA_strain_circum_combined_ES
+    vols[8] = peak_LA_strain_circum_combined_max
+    vols[9] = peak_LA_strain_circum_2ch_ES
+    vols[10] = peak_LA_strain_circum_2ch_max
+    vols[11] = peak_LA_strain_circum_4ch_ES
+    vols[12] = peak_LA_strain_circum_4ch_max
 
-    vols[13] = peak_LA_strain_longitud_2ch_ES
-    vols[14] = peak_LA_strain_longitud_2ch_max
-    vols[15] = peak_LA_strain_longitud_4ch_ES
-    vols[16] = peak_LA_strain_longitud_4ch_max
-    vols[17] = peak_LA_strain_longitud_combined_ES
-    vols[18] = peak_LA_strain_longitud_combined_max
+    vols[13] = peak_LA_strain_longitud_combined_ES
+    vols[14] = peak_LA_strain_longitud_combined_max
+    vols[15] = peak_LA_strain_longitud_2ch_ES
+    vols[16] = peak_LA_strain_longitud_2ch_max
+    vols[17] = peak_LA_strain_longitud_4ch_ES
+    vols[18] = peak_LA_strain_longitud_4ch_max
 
     vols[19] = peak_RA_volume_area
     vols[20] = peak_RA_volume_SR
@@ -1898,21 +2060,32 @@ def compute_atria_params(study_ID, subject_dir, results_dir, logger):
     vols[23] = peak_RA_strain_longitud_ES
     vols[24] = peak_RA_strain_longitud_max
 
-    vols = np.reshape(vols, [1, 25])
+    vols[25] = peak_LA_strainRate_circum_combo
+    vols[26] = peak_LA_strainRate_circum_2ch
+    vols[27] = peak_LA_strainRate_circum_4ch
+    vols[28] = peak_LA_strainRate_longitud_combo
+    vols[29] = peak_LA_strainRate_longit_2ch
+    vols[30] = peak_LA_strainRate_longitud_4ch
+    vols[31] = peak_RA_strainRate_circum
+    vols[32] = peak_RA_strainRate_longitud
+
+    vols = np.reshape(vols, [1, 33])
     df = pd.DataFrame(vols)
-    header = ['eid', 'LA_vol_area_2ch', 'LA_vol_SR_2ch',
-                      'LA_vol_area_4ch', 'LA_vol_SR_4ch', 'LA_vol_area_combo',
-                      'LA_vol_SR_combo', 'LA_strain_circum_2ch_ES',
-                      'LA_strain_circum_2ch_max', 'LA_strain_circum_4ch_ES',
-                      'LA_strain_circum_4ch_max',
-                      'LA_strain_circum_combined_ES',
-                      'LA_strain_circum_combined_max',
-                      'LA_strain_long_2ch_ES', 'LA_strain_long_2ch_max',
-                      'LA_strain_long_4ch_ES', 'LA_strain_long_4ch_max',
-                      'LA_strain_long_combo_ES', 'LA_strain_long_combo_max',
-                      'RA_volume_area', 'RA_volume_SR', 'RA_strain_circum_ES',
-                      'RA_strain_circum_max', 'RA_strain_long_ES',
-                      'RA_strain_long_max']
+    header = ['eid', 'LA_vol_area_combo', 'LA_vol_SR_combo', 'LA_vol_area_2ch', 'LA_vol_SR_2ch',
+                'LA_vol_area_4ch', 'LA_vol_SR_4ch',  'LA_strain_circum_combined_ES',
+                'LA_strain_circum_combined_max', 'LA_strain_circum_2ch_ES',
+                'LA_strain_circum_2ch_max', 'LA_strain_circum_4ch_ES',
+                'LA_strain_circum_4ch_max',
+                'LA_strain_long_2ch_ES', 'LA_strain_long_2ch_max',
+                'LA_strain_long_4ch_ES', 'LA_strain_long_4ch_max',
+                'LA_strain_long_combo_ES', 'LA_strain_long_combo_max',
+                'RA_volume_area', 'RA_volume_SR', 'RA_strain_circum_ES',
+                'RA_strain_circum_max', 'RA_strain_long_ES',
+                'RA_strain_long_max', 'LA_strainRate_circum_combo', 'LA_strainRate_circum_2ch',
+                'LA_strainRate_circum_4ch', 'LA_strainRate_longit_combo',
+                'LA_strainRate_longit_2ch', 'LA_strainRate_longit_4ch',
+                'RA_strainRate_circum', 'RA_strainRate_longit'
+                ]
     df.to_csv(os.path.join(results_dir, 'atrial_peak_params.csv'),
               header=header, index=False)
     
