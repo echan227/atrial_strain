@@ -33,6 +33,8 @@ if not overwrite_summary_csv and os.path.exists(summary_csv_file):
 else:
     already_run_IDs = []
 
+study_IDs = ['3399888']
+
 error_subjects = []
 for idx, study_ID in enumerate(study_IDs):
     logger.info('-'*40)

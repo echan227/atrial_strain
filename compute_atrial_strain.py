@@ -19,11 +19,11 @@ from scipy.interpolate import interp1d
 from scipy.signal import savgol_filter
 from scipy.signal import resample
 import numpy as np
-debug = False
+debug = True
 Nsegments_length = 15
 
 # Enable interactive mode in matplotlib
-# plt.ion()
+plt.ion()
 
 
 def smooth_curve_1d(curve, num_frames, s, num_points=None, x_values=None):
