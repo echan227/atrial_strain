@@ -1,0 +1,7 @@
+{
+    "DEFAULT_DATA_DIR": "/data/nnUNet/nnUNet_raw_data_base/nnUNet_raw_data/",
+    "DEFAULT_LOCAL_DIR": "/home/br14/code/Python/Atrial_strain_emily",
+    "DEFAULT_NNUNET_NIFTI": "nnUNet_raw_data",
+    "DEFAULT_LOG_DIR": "log"
+  }
+  
